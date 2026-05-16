@@ -1,0 +1,35 @@
+services:
+  llmhq:
+    build: .
+    container_name: llmhq
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:7900:7900"
+    environment:
+      LLMHQ_HOST: "0.0.0.0"
+      LLMHQ_PORT: "8080"
+      LLMHQ_AUTH_MODE: "none"
+      LLMHQ_ASSET_DIR: "/app/data/assets"
+      LLMHQ_CONVERSATION_DIR: "/app/data/conversations"
+      LLMHQ_DEFAULT_CHAT_MODEL: "claude-sonnet"
+      LLMHQ_MAX_CONVERSATION_MESSAGES: "60"
+      LLMHQ_CLAUDE_ENABLED: "1"
+      LLMHQ_CLAUDE_COMMAND: "claude"
+      LLMHQ_CLAUDE_WORKERS: "claude-1=/app/data/profiles/claude-1"
+      LLMHQ_CODEX_ENABLED: "1"
+      LLMHQ_CODEX_COMMAND: "codex"
+      LLMHQ_CODEX_WORKERS: "codex-1=/app/data/profiles/codex-1"
+      LLMHQ_CODEX_WORKDIR: "/app/data/codex-workdir"
+      LLMHQ_EXPERIMENTAL_CHATGPT_BROWSER: "1"
+      LLMHQ_CHATGPT_PROFILE_DIR: "/app/data/browser-profiles/chatgpt-main"
+      LLMHQ_CHATGPT_HEADLESS: "1"
+      LLMHQ_CHATGPT_TIMEOUT_MS: "60000"
+    volumes:
+      - ./data:/app/data
+    networks:
+      - llmhq_private
+
+networks:
+  llmhq_private:
+    name: llmhq_private

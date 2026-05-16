@@ -1,0 +1,40 @@
+{
+  "name": "llmhq",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Private same-server LLM gateway with shared provider workers, stateful conversations, fallback, and experimental ChatGPT image generation.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rester159/LLMHQ.git"
+  },
+  "bugs": {
+    "url": "https://github.com/rester159/LLMHQ/issues"
+  },
+  "homepage": "https://github.com/rester159/LLMHQ#readme",
+  "keywords": [
+    "llm",
+    "gateway",
+    "claude",
+    "codex",
+    "chatgpt",
+    "unraid",
+    "docker"
+  ],
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "doctor": "node scripts/doctor.js",
+    "key:generate": "node scripts/generate-api-key.js",
+    "test": "node --test",
+    "login:chatgpt": "node scripts/chatgpt-login.js",
+    "login:chatgpt:vnc": "bash scripts/chatgpt-login-vnc.sh",
+    "login:claude": "node scripts/cli-login.js claude",
+    "login:codex": "node scripts/cli-login.js codex"
+  },
+  "dependencies": {
+    "fastify": "^5.8.5",
+    "playwright": "^1.60.0"
+  },
+  "devDependencies": {}
+}
