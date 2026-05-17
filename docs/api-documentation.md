@@ -353,6 +353,15 @@ If `stream: true`, LLMHQ returns `text/event-stream`.
 
 The current streaming implementation emits the full assistant content as one chunk, followed by a finish chunk and `[DONE]`. It is API-compatible enough for simple stream consumers but is not token-by-token streaming.
 
+If the request also includes `status_events: true`, LLMHQ emits named SSE events before the final assistant chunk:
+
+```text
+event: status
+data: {"type":"status","stage":"worker_started","message":"Running claude-sonnet on claude-1.","model":"claude-sonnet","worker":"claude-1","created":1779041015}
+```
+
+Status events are generic and provider-neutral. Apps can show `message` as the current action while the request is running. Common `stage` values include `request_received`, `model_selected`, `model_attempt`, `worker_started`, `profile_ready`, `provider_running`, `response_received`, `worker_completed`, and `worker_failed`.
+
 ### `POST /v1/conversations`
 
 Creates or resolves a stored conversation.

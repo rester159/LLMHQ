@@ -22,14 +22,16 @@ export class ClaudeCliChatWorker {
     };
   }
 
-  async generateChat({ messages, model }) {
+  async generateChat({ messages, model, onStatus }) {
     return this.#runExclusive(async () => {
       if (this.profileDir) {
+        onStatus?.("profile_ready", `Preparing ${this.id} profile.`);
         await fs.mkdir(this.profileDir, { recursive: true });
       }
 
       const prompt = messagesToPrompt(messages);
       const args = ["-p", "--output-format", "json", "--model", model.cliModel, "--tools", ""];
+      onStatus?.("provider_running", `Waiting for Claude CLI response from ${this.id}.`);
       const result = await runCli({
         command: this.command,
         args,
@@ -43,6 +45,7 @@ export class ClaudeCliChatWorker {
         timeoutMs: this.timeoutMs,
       });
 
+      onStatus?.("response_received", `Received Claude CLI response from ${this.id}.`);
       return {
         content: parseClaudeOutput(result.stdout),
         providerMetadata: {

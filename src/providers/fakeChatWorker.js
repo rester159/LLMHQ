@@ -15,7 +15,8 @@ export class FakeChatWorker {
     };
   }
 
-  async generateChat({ messages, model }) {
+  async generateChat({ messages, model, onStatus }) {
+    onStatus?.("provider_running", `Waiting for ${this.id}.`);
     if (this.failWith) {
       throw new ProviderError(this.failWith, `Fake worker failed with ${this.failWith}.`);
     }

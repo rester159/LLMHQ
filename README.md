@@ -113,6 +113,8 @@ Available v1 chat model aliases:
 
 Fallback is explicit. If `claude-opus` fails and `claude-sonnet` succeeds, the response includes `requested_model`, `used_model`, `fallback_used`, `fallback_reason`, and `attempts`.
 
+For live "current action" UI, send `stream = $true` and `status_events = $true`. LLMHQ will emit named SSE `status` events with generic fields like `stage`, `message`, `model`, `worker`, and `created` before the final assistant chunk.
+
 ## Conversation Storage
 
 Apps can choose either mode:

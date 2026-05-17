@@ -370,6 +370,42 @@ test("chat completions support streaming shape", async () => {
   assert.match(response.body, /stream sonnet/);
 });
 
+test("chat completions can stream current status events", async () => {
+  const assetDir = path.join(os.tmpdir(), `llmhq-test-${Date.now()}-status-stream`);
+  const registry = createModelRegistry({
+    fakeChatModels: [
+      {
+        id: "claude-sonnet",
+        workers: [new FakeChatWorker({ id: "fake-sonnet", response: "status sonnet" })],
+        fallback: [],
+      },
+    ],
+  });
+  const app = await buildApp({
+    fastify: Fastify(),
+    config: { ...testConfig(assetDir), authMode: "none" },
+    registry,
+    assetStore: new AssetStore(assetDir),
+  });
+
+  const response = await app.inject({
+    method: "POST",
+    url: "/v1/chat/completions",
+    payload: {
+      model: "claude-sonnet",
+      messages: [{ role: "user", content: "show status" }],
+      stream: true,
+      status_events: true,
+    },
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.match(response.body, /event: status/);
+  assert.match(response.body, /"stage":"worker_started"/);
+  assert.match(response.body, /"message":"Running claude-sonnet on fake-sonnet\."/);
+  assert.match(response.body, /status sonnet/);
+});
+
 test("conversation creation is idempotent by project and key", async () => {
   const assetDir = path.join(os.tmpdir(), `llmhq-test-${Date.now()}-conversation-create`);
   const registry = createModelRegistry({

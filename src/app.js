@@ -70,12 +70,14 @@ export async function buildApp({
     const body = request.body || {};
 
     try {
-      const response = await runChatCompletion({ activeRegistry, config, body, messages: body.messages });
-
       if (body.stream) {
-        return sendChatCompletionStream(reply, response);
+        return sendLiveChatCompletionStream(reply, {
+          emitStatusEvents: Boolean(body.status_events),
+          run: (onStatus) => runChatCompletion({ activeRegistry, config, body, messages: body.messages, onStatus }),
+        });
       }
 
+      const response = await runChatCompletion({ activeRegistry, config, body, messages: body.messages });
       return reply.send(response);
     } catch (error) {
       return sendProviderError(reply, error);
@@ -127,6 +129,21 @@ export async function buildApp({
     try {
       const body = request.body || {};
       const conversation = await conversations.require(request.params.conversationId);
+      if (body.stream) {
+        return sendLiveChatCompletionStream(reply, {
+          emitStatusEvents: Boolean(body.status_events),
+          run: (onStatus) =>
+            runConversationTurn({
+              activeRegistry,
+              config,
+              conversations,
+              conversation,
+              body,
+              onStatus,
+            }),
+          extractCompletion: (result) => result.chat_completion,
+        });
+      }
       const result = await runConversationTurn({
         activeRegistry,
         config,
@@ -152,6 +169,21 @@ export async function buildApp({
         metadata: body.metadata,
         context: body.context,
       });
+      if (body.stream) {
+        return sendLiveChatCompletionStream(reply, {
+          emitStatusEvents: Boolean(body.status_events),
+          run: (onStatus) =>
+            runConversationTurn({
+              activeRegistry,
+              config,
+              conversations,
+              conversation,
+              body,
+              onStatus,
+            }),
+          extractCompletion: (result) => result.chat_completion,
+        });
+      }
       const result = await runConversationTurn({
         activeRegistry,
         config,
@@ -237,7 +269,7 @@ export async function buildApp({
   return app;
 }
 
-async function runConversationTurn({ activeRegistry, config, conversations, conversation, body }) {
+async function runConversationTurn({ activeRegistry, config, conversations, conversation, body, onStatus }) {
   const inputMessages = extractConversationInputMessages(body);
   const context = extractConversationContext(body);
   const conversationWithContext =
@@ -257,6 +289,7 @@ async function runConversationTurn({ activeRegistry, config, conversations, conv
       messages: contextMessages,
     },
     messages: contextMessages,
+    onStatus,
   });
   const updated = await conversations.appendTurn(conversationWithContext.id, {
     inputMessages,
@@ -277,19 +310,26 @@ async function runConversationTurn({ activeRegistry, config, conversations, conv
   };
 }
 
-async function runChatCompletion({ activeRegistry, config, body, messages }) {
+async function runChatCompletion({ activeRegistry, config, body, messages, onStatus }) {
   const requestedModel = body.model || config.chat?.defaultModel || activeRegistry.defaultModel("chat");
   const attempts = [];
+  const statusEvents = [];
+  const emitStatus = createStatusEmitter((event) => {
+    statusEvents.push(event);
+    onStatus?.(event);
+  });
 
   if (!Array.isArray(messages) || messages.length === 0) {
     throw new ProviderError("invalid_request", "messages must be a non-empty array.");
   }
 
+  emitStatus("request_received", "Received chat request.", { requested_model: requestedModel });
   const initialModel = activeRegistry.get(requestedModel);
   if (initialModel.kind !== "chat") {
     throw new ProviderError("invalid_request", `${requestedModel} is not a chat model.`);
   }
 
+  emitStatus("model_selected", `Selected ${initialModel.id}.`, { model: initialModel.id });
   const result = await tryModelWithFallbacks(activeRegistry, initialModel, {
     method: "generateChat",
     input: {
@@ -299,28 +339,44 @@ async function runChatCompletion({ activeRegistry, config, body, messages }) {
     },
     attempts,
     fallbackPolicy: body.fallback ?? "default",
+    onStatus: emitStatus,
   });
 
   return createChatCompletionResponse({
     requestedModel,
     result,
     attempts,
+    statusEvents,
   });
 }
 
-async function tryModelWithFallbacks(registry, model, { method, input, attempts, fallbackPolicy }) {
+async function tryModelWithFallbacks(registry, model, { method, input, attempts, fallbackPolicy, onStatus }) {
   const candidateIds = candidateModelIds(model, fallbackPolicy);
   let lastError = null;
 
   for (const candidateId of candidateIds) {
     const candidate = registry.get(candidateId);
     const workers = orderedWorkers(candidate);
+    onStatus?.("model_attempt", `Trying ${candidate.id}.`, { model: candidate.id });
 
     for (const worker of workers) {
       try {
         attempts.push({ model: candidate.id, worker: worker.id, status: "started" });
-        const result = await worker[method]({ ...input, model: candidate });
+        onStatus?.("worker_started", `Running ${candidate.id} on ${worker.id}.`, {
+          model: candidate.id,
+          worker: worker.id,
+        });
+        const result = await worker[method]({
+          ...input,
+          model: candidate,
+          onStatus: (stage, message, details = {}) =>
+            onStatus?.(stage, message, { model: candidate.id, worker: worker.id, ...details }),
+        });
         attempts[attempts.length - 1] = { model: candidate.id, worker: worker.id, status: "succeeded" };
+        onStatus?.("worker_completed", `${worker.id} completed.`, {
+          model: candidate.id,
+          worker: worker.id,
+        });
         return {
           ...result,
           usedModel: candidate.id,
@@ -335,6 +391,11 @@ async function tryModelWithFallbacks(registry, model, { method, input, attempts,
           code: providerError.code,
           message: providerError.message,
         };
+        onStatus?.("worker_failed", `${worker.id} failed: ${providerError.code}.`, {
+          model: candidate.id,
+          worker: worker.id,
+          code: providerError.code,
+        });
         lastError = providerError;
       }
     }
@@ -370,7 +431,7 @@ function orderedWorkers(model) {
   return [...workers.slice(start), ...workers.slice(0, start)];
 }
 
-function createChatCompletionResponse({ requestedModel, result, attempts }) {
+function createChatCompletionResponse({ requestedModel, result, attempts, statusEvents = [] }) {
   const now = Math.floor(Date.now() / 1000);
   return {
     id: `chatcmpl_${cryptoRandomId()}`,
@@ -383,6 +444,7 @@ function createChatCompletionResponse({ requestedModel, result, attempts }) {
     fallback_used: result.usedModel !== requestedModel,
     fallback_reason: firstFailureReason(attempts),
     attempts,
+    status_events: statusEvents,
     choices: [
       {
         index: 0,
@@ -397,6 +459,60 @@ function createChatCompletionResponse({ requestedModel, result, attempts }) {
   };
 }
 
+function createStatusEmitter(onStatus) {
+  return (stage, message, details = {}) => {
+    const event = {
+      type: "status",
+      stage,
+      message,
+      created: Math.floor(Date.now() / 1000),
+      ...details,
+    };
+    onStatus(event);
+    return event;
+  };
+}
+
+function writeSseEvent(reply, event, data) {
+  if (event) {
+    reply.raw.write(`event: ${event}\n`);
+  }
+  reply.raw.write(`data: ${JSON.stringify(data)}\n\n`);
+}
+
+async function sendLiveChatCompletionStream(reply, { run, emitStatusEvents = false, extractCompletion = (result) => result }) {
+  reply.raw.writeHead(200, {
+    "content-type": "text/event-stream; charset=utf-8",
+    "cache-control": "no-cache",
+    connection: "keep-alive",
+  });
+
+  const onStatus = (event) => {
+    if (emitStatusEvents) {
+      writeSseEvent(reply, "status", event);
+    }
+  };
+
+  try {
+    const result = await run(onStatus);
+    const response = extractCompletion(result);
+    sendChatCompletionStreamChunks(reply, response);
+  } catch (error) {
+    const providerError = toProviderError(error);
+    writeSseEvent(reply, "error", {
+      error: {
+        code: providerError.code,
+        message: providerError.message,
+        details: providerError.details,
+        attempts: providerError.details?.attempts || [],
+      },
+    });
+    reply.raw.write("data: [DONE]\n\n");
+  } finally {
+    reply.raw.end();
+  }
+}
+
 function sendChatCompletionStream(reply, response) {
   reply.raw.writeHead(200, {
     "content-type": "text/event-stream; charset=utf-8",
@@ -404,6 +520,11 @@ function sendChatCompletionStream(reply, response) {
     connection: "keep-alive",
   });
 
+  sendChatCompletionStreamChunks(reply, response);
+  reply.raw.end();
+}
+
+function sendChatCompletionStreamChunks(reply, response) {
   const chunk = {
     id: response.id,
     object: "chat.completion.chunk",
@@ -414,6 +535,12 @@ function sendChatCompletionStream(reply, response) {
     fallback_used: response.fallback_used,
     fallback_reason: response.fallback_reason,
     attempts: response.attempts,
+    status_events: response.status_events || [],
+    conversation_id: response.conversation_id,
+    project_id: response.project_id,
+    conversation_key: response.conversation_key,
+    context_message_count: response.context_message_count,
+    context_updated_at: response.context_updated_at,
     choices: [
       {
         index: 0,
@@ -437,7 +564,6 @@ function sendChatCompletionStream(reply, response) {
     })}\n\n`,
   );
   reply.raw.write("data: [DONE]\n\n");
-  reply.raw.end();
 }
 
 function firstFailureReason(attempts) {
