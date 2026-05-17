@@ -375,6 +375,20 @@ test("chat completions skip a worker that already failed with sticky auth state"
   );
   assert.equal(body.attempts[1].model, "claude-sonnet");
   assert.equal(body.attempts[1].code, "auth_required");
+
+  const noFallback = await app.inject({
+    method: "POST",
+    url: "/v1/chat/completions",
+    payload: {
+      model: "claude-haiku",
+      fallback: "none",
+      messages: [{ role: "user", content: "no fallback now" }],
+    },
+  });
+  assert.equal(noFallback.statusCode, 503);
+  assert.equal(noFallback.json().error.code, "auth_required");
+  assert.equal(noFallback.json().error.retryable, false);
+  assert.equal(noFallback.json().error.attempts[0].status, "skipped");
 });
 
 test("chat completions can disable fallback", async () => {
