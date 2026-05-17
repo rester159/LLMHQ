@@ -1034,6 +1034,72 @@ test("admin provider login starts codex device auth session", async () => {
   assert.match(session.profileDir, /codex-1/);
 });
 
+test("admin provider login starts claude browser auth session", async () => {
+  const assetDir = path.join(os.tmpdir(), `llmhq-test-${Date.now()}-provider-login-claude`);
+  const fakeClaudeCommand = await writeFakeClaudeCommand(assetDir);
+  const config = runtimeConfig(assetDir);
+  config.claude.command = fakeClaudeCommand;
+  const app = await buildApp({
+    fastify: Fastify(),
+    config,
+    assetStore: new AssetStore(assetDir),
+  });
+
+  const started = await app.inject({
+    method: "POST",
+    url: "/admin/provider-login",
+    payload: { provider: "claude", worker: "claude-1", mode: "claudeai" },
+  });
+  assert.equal(started.statusCode, 200);
+  const sessionId = started.json().session.id;
+
+  let session = started.json().session;
+  for (let index = 0; index < 20 && session.status === "running"; index += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    const status = await app.inject({ method: "GET", url: `/admin/provider-login/${sessionId}` });
+    assert.equal(status.statusCode, 200);
+    session = status.json().session;
+  }
+
+  assert.equal(session.status, "completed");
+  assert.match(session.output, /CLAUDE-LOGIN-URL/);
+  assert.equal(session.worker, "claude-1");
+  assert.match(session.profileDir, /claude-1/);
+});
+
+test("admin webui proxies generic v1 API requests to the gateway", async () => {
+  let captured = null;
+  const fetchImpl = async (url, options = {}) => {
+    captured = { url: String(url), method: options.method, body: JSON.parse(options.body) };
+    return rawJsonResponse({
+      id: "chatcmpl-test",
+      object: "chat.completion",
+      choices: [{ message: { role: "assistant", content: "ok" } }],
+    });
+  };
+  const app = await buildAdminApp({
+    fastify: Fastify(),
+    llmhqBaseUrl: "http://llmhq:8080",
+    fetchImpl,
+  });
+
+  const response = await app.inject({
+    method: "POST",
+    url: "/v1/chat/completions?trace=1",
+    payload: {
+      model: "claude-haiku",
+      stream: false,
+      messages: [{ role: "user", content: "hello" }],
+    },
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.json().choices[0].message.content, "ok");
+  assert.equal(captured.url, "http://llmhq:8080/v1/chat/completions?trace=1");
+  assert.equal(captured.method, "POST");
+  assert.equal(captured.body.model, "claude-haiku");
+});
+
 test("admin webui renders and summarizes gateway state", async () => {
   const settingsPayload = {
     version: 1,
@@ -1171,6 +1237,7 @@ test("admin webui renders and summarizes gateway state", async () => {
   assert.equal(page.statusCode, 200);
   assert.match(page.headers["content-type"], /text\/html/);
   assert.match(page.body, /LLMHQ Admin/);
+  assert.match(page.body, /Start Claude Login/);
   assert.match(page.body, /Start Codex Device Login/);
 
   const summary = await app.inject({ method: "GET", url: "/admin/api/summary" });
@@ -1234,10 +1301,38 @@ async function writeFakeCodexCommand(assetDir) {
   return filePath;
 }
 
+async function writeFakeClaudeCommand(assetDir) {
+  await fs.mkdir(assetDir, { recursive: true });
+  if (process.platform === "win32") {
+    const filePath = path.join(assetDir, "fake-claude.cmd");
+    await fs.writeFile(filePath, "@echo off\r\necho CLAUDE-LOGIN-URL https://example.test/oauth\r\nexit /b 0\r\n", "utf8");
+    return filePath;
+  }
+
+  const filePath = path.join(assetDir, "fake-claude");
+  await fs.writeFile(filePath, "#!/bin/sh\necho CLAUDE-LOGIN-URL https://example.test/oauth\nexit 0\n", "utf8");
+  await fs.chmod(filePath, 0o755);
+  return filePath;
+}
+
 function jsonResponse(payload) {
   return {
     ok: true,
     status: 200,
     json: async () => payload,
+  };
+}
+
+function rawJsonResponse(payload, status = 200) {
+  const buffer = Buffer.from(JSON.stringify(payload), "utf8");
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    headers: {
+      get(name) {
+        return String(name).toLowerCase() === "content-type" ? "application/json" : null;
+      },
+    },
+    arrayBuffer: async () => buffer,
   };
 }

@@ -53,6 +53,14 @@ LLMHQ_AUTH_MODE=none
 
 Then product apps on the same host can call LLMHQ without an `Authorization` header. In the default Compose setup, LLMHQ also runs a small server-local network sync service that connects the `llmhq` container to user-defined Docker bridge networks on the same server. Product containers can use `http://llmhq:8080` without joining a special LLMHQ network themselves. Host-native processes can use the loopback-only port `http://127.0.0.1:18088`. The Unraid WebUI entry opens the admin UI at `http://[IP]:[PORT:18089]/admin`.
 
+The WebUI container also proxies generic `/v1/*` API requests to the internal gateway. This gives desktop validation runners and browser-visible tools one deliberate LAN URL for the same working Unraid instance:
+
+```env
+LLMHQ_BASE_URL=http://<server-ip>:18089
+```
+
+Same-server containers should still prefer `http://llmhq:8080`; the WebUI proxy is for callers that are not on the Unraid Docker networks and would otherwise accidentally resolve a different local `llmhq` container.
+
 `npm run login:chatgpt:vnc` opens a persistent Playwright browser profile at `LLMHQ_CHATGPT_PROFILE_DIR` and exposes it through noVNC. If you publish the noVNC port for local setup, open `http://127.0.0.1:7900/vnc.html?autoconnect=1&resize=scale`. Log in manually with Google, then press Enter in the terminal. LLMHQ will reuse that browser profile for image generation.
 
 `npm run login:claude -- claude-1` and `npm run login:codex -- codex-1` log each subscription CLI into its own persistent profile.
@@ -91,7 +99,7 @@ Then call the wrapper over HTTP.
 
 ## Admin WebUI
 
-The Compose deployment publishes a browser-facing admin UI on:
+The Compose deployment publishes a browser-facing admin UI and `/v1/*` API proxy on:
 
 ```text
 http://<server-ip>:18089/admin
@@ -103,7 +111,7 @@ The `llmhq` and `llmhq-webui` containers include the Unraid label:
 net.unraid.docker.webui: "http://[IP]:[PORT:18089]/admin"
 ```
 
-That makes the WebUI action available from the Unraid Docker container menu. The UI shows gateway status, configured provider accounts, model aliases, fallback chains, and the editable runtime settings JSON. Saving runtime settings writes `LLMHQ_SETTINGS_FILE` and hot-swaps the live model registry without restarting LLMHQ.
+That makes the WebUI action available from the Unraid Docker container menu. The UI shows gateway status, configured provider accounts, model aliases, fallback chains, provider login actions, and the editable runtime settings JSON. Saving runtime settings writes `LLMHQ_SETTINGS_FILE` and hot-swaps the live model registry without restarting LLMHQ.
 
 ```powershell
 $body = @{
@@ -243,9 +251,9 @@ Invoke-RestMethod `
 
 - The default Compose setup exposes the gateway to same-server containers as `http://llmhq:8080` by automatically connecting the `llmhq` container to user-defined Docker bridge networks.
 - The default Compose setup also publishes a host-local port as `http://127.0.0.1:18088`; it is bound to loopback and is not exposed to the LAN.
-- The default Compose setup publishes the admin WebUI on `http://<server-ip>:18089/admin` and adds the Unraid `net.unraid.docker.webui` label.
+- The default Compose setup publishes the admin WebUI on `http://<server-ip>:18089/admin`, proxies `/v1/*` through the same port for deliberate LAN validation, and adds the Unraid `net.unraid.docker.webui` label.
 - Runtime model aliases, provider profile directories, provider-native model arguments, default model, and fallback chains are stored in `./data/settings.json` by default and can be edited through the admin WebUI.
-- The admin WebUI includes Provider Login for Codex device auth and Provider Probe for visible provider-session checks. Provider Probe sends a minimal request per provider and exposes `auth_required` as an LLMHQ/provider-session problem before product apps hit it.
+- The admin WebUI includes Provider Login for Claude and Codex device auth, plus Provider Probe for visible provider-session checks. Provider Probe sends a minimal request per provider and exposes `auth_required` as an LLMHQ/provider-session problem before product apps hit it.
 - Provider failure responses include `retryable`, `auth_status`, and sanitized `diagnostic` fields so product apps can report provider account problems accurately instead of treating them as payload format errors.
 - If a provider worker fails with sticky state such as `auth_required`, LLMHQ marks that worker unavailable briefly and skips other aliases using the same failure domain so fallback can reach a different provider faster. Downstream apps should log `llmhq.instance_id` and `attempts[].failure_domain` so app failures can be matched to the exact LLMHQ process and provider profile that served them.
 - Claude and Codex workers use persistent profile directories under `./data/profiles/...`.
