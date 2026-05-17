@@ -8,6 +8,7 @@ import { buildAdminApp } from "../src/adminServer.js";
 import { buildApp } from "../src/app.js";
 import { AssetStore } from "../src/assets.js";
 import { ProviderError } from "../src/errors.js";
+import { buildProxyApp } from "../src/proxyApp.js";
 import { classifyCliFailure } from "../src/providers/cliProcess.js";
 import { FakeChatWorker } from "../src/providers/fakeChatWorker.js";
 import { FakeImageWorker } from "../src/providers/fakeImageWorker.js";
@@ -1100,6 +1101,51 @@ test("admin webui proxies generic v1 API requests to the gateway", async () => {
   assert.equal(captured.body.model, "claude-haiku");
 });
 
+test("proxy app forwards v1 requests and maps health to remote admin summary", async () => {
+  const calls = [];
+  const fetchImpl = async (url, options = {}) => {
+    calls.push({ url: String(url), method: options.method, body: options.body ? JSON.parse(options.body) : null });
+    if (String(url).endsWith("/admin/api/summary")) {
+      return rawJsonResponse({
+        status: "ok",
+        health: {
+          status: "ok",
+          instance: { instance_id: "unraid-good" },
+        },
+      });
+    }
+    return rawJsonResponse({
+      requested_model: "claude-haiku",
+      used_model: "claude-haiku",
+      choices: [{ message: { role: "assistant", content: "ok" } }],
+    });
+  };
+  const app = await buildProxyApp({
+    fastify: Fastify(),
+    targetUrl: "http://10.0.5.202:18089",
+    fetchImpl,
+  });
+
+  const health = await app.inject({ method: "GET", url: "/health" });
+  assert.equal(health.statusCode, 200);
+  assert.equal(health.json().instance.instance_id, "unraid-good");
+  assert.equal(calls[0].url, "http://10.0.5.202:18089/admin/api/summary");
+
+  const chat = await app.inject({
+    method: "POST",
+    url: "/v1/chat/completions",
+    payload: {
+      model: "claude-haiku",
+      fallback: "default",
+      messages: [{ role: "user", content: "hello" }],
+    },
+  });
+  assert.equal(chat.statusCode, 200);
+  assert.equal(chat.json().used_model, "claude-haiku");
+  assert.equal(calls[1].url, "http://10.0.5.202:18089/v1/chat/completions");
+  assert.equal(calls[1].body.model, "claude-haiku");
+});
+
 test("admin webui renders and summarizes gateway state", async () => {
   const settingsPayload = {
     version: 1,
@@ -1333,6 +1379,7 @@ function rawJsonResponse(payload, status = 200) {
         return String(name).toLowerCase() === "content-type" ? "application/json" : null;
       },
     },
+    json: async () => payload,
     arrayBuffer: async () => buffer,
   };
 }
