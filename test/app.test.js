@@ -997,6 +997,39 @@ test("admin provider probe reports provider usability without changing app paylo
   assert.equal(body.results[1].code, "auth_required");
 });
 
+test("admin provider login starts codex device auth session", async () => {
+  const assetDir = path.join(os.tmpdir(), `llmhq-test-${Date.now()}-provider-login`);
+  const fakeCodexCommand = await writeFakeCodexCommand(assetDir);
+  const config = runtimeConfig(assetDir);
+  config.codex.command = fakeCodexCommand;
+  const app = await buildApp({
+    fastify: Fastify(),
+    config,
+    assetStore: new AssetStore(assetDir),
+  });
+
+  const started = await app.inject({
+    method: "POST",
+    url: "/admin/provider-login",
+    payload: { provider: "codex", worker: "codex-1", mode: "device" },
+  });
+  assert.equal(started.statusCode, 200);
+  const sessionId = started.json().session.id;
+
+  let session = started.json().session;
+  for (let index = 0; index < 20 && session.status === "running"; index += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    const status = await app.inject({ method: "GET", url: `/admin/provider-login/${sessionId}` });
+    assert.equal(status.statusCode, 200);
+    session = status.json().session;
+  }
+
+  assert.equal(session.status, "completed");
+  assert.match(session.output, /DEVICE-AUTH-CODE/);
+  assert.equal(session.worker, "codex-1");
+  assert.match(session.profileDir, /codex-1/);
+});
+
 test("admin webui renders and summarizes gateway state", async () => {
   const settingsPayload = {
     version: 1,
@@ -1097,6 +1130,30 @@ test("admin webui renders and summarizes gateway state", async () => {
         ],
       });
     }
+    if (String(url).endsWith("/admin/provider-login") && options.method === "POST") {
+      return jsonResponse({
+        status: "ok",
+        session: {
+          id: "login-test",
+          provider: "codex",
+          worker: "codex-1",
+          status: "running",
+          output: "DEVICE-AUTH-CODE",
+        },
+      });
+    }
+    if (String(url).endsWith("/admin/provider-login/login-test")) {
+      return jsonResponse({
+        status: "ok",
+        session: {
+          id: "login-test",
+          provider: "codex",
+          worker: "codex-1",
+          status: "completed",
+          output: "DEVICE-AUTH-CODE",
+        },
+      });
+    }
     return { ok: false, status: 404, json: async () => ({}) };
   };
 
@@ -1110,6 +1167,7 @@ test("admin webui renders and summarizes gateway state", async () => {
   assert.equal(page.statusCode, 200);
   assert.match(page.headers["content-type"], /text\/html/);
   assert.match(page.body, /LLMHQ Admin/);
+  assert.match(page.body, /Start Codex Device Login/);
 
   const summary = await app.inject({ method: "GET", url: "/admin/api/summary" });
   assert.equal(summary.statusCode, 200);
@@ -1144,7 +1202,33 @@ test("admin webui renders and summarizes gateway state", async () => {
   assert.equal(probe.statusCode, 200);
   assert.equal(probe.json().status, "degraded");
   assert.equal(probe.json().results[0].code, "auth_required");
+
+  const login = await app.inject({
+    method: "POST",
+    url: "/admin/api/provider-login",
+    payload: { provider: "codex", worker: "codex-1", mode: "device" },
+  });
+  assert.equal(login.statusCode, 200);
+  assert.equal(login.json().session.id, "login-test");
+
+  const loginStatus = await app.inject({ method: "GET", url: "/admin/api/provider-login/login-test" });
+  assert.equal(loginStatus.statusCode, 200);
+  assert.equal(loginStatus.json().session.status, "completed");
 });
+
+async function writeFakeCodexCommand(assetDir) {
+  await fs.mkdir(assetDir, { recursive: true });
+  if (process.platform === "win32") {
+    const filePath = path.join(assetDir, "fake-codex.cmd");
+    await fs.writeFile(filePath, "@echo off\r\necho DEVICE-AUTH-CODE https://example.test ABCD-EFGH\r\nexit /b 0\r\n", "utf8");
+    return filePath;
+  }
+
+  const filePath = path.join(assetDir, "fake-codex");
+  await fs.writeFile(filePath, "#!/bin/sh\necho DEVICE-AUTH-CODE https://example.test ABCD-EFGH\nexit 0\n", "utf8");
+  await fs.chmod(filePath, 0o755);
+  return filePath;
+}
 
 function jsonResponse(payload) {
   return {

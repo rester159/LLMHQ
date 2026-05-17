@@ -11,6 +11,7 @@ import { ProviderError, toProviderError } from "./errors.js";
 import { ChatGptImageBrowserWorker } from "./providers/chatgptImageBrowserWorker.js";
 import { FakeChatWorker } from "./providers/fakeChatWorker.js";
 import { FakeImageWorker } from "./providers/fakeImageWorker.js";
+import { getProviderLoginSession, startProviderLogin } from "./providerLogin.js";
 import { createModelRegistry } from "./registry.js";
 import { defaultRuntimeSettings, SettingsStore } from "./settingsStore.js";
 
@@ -158,6 +159,28 @@ export async function buildApp({
         status: results.every((result) => result.ok) ? "ok" : "degraded",
         results,
       });
+    } catch (error) {
+      return sendProviderError(reply, error);
+    }
+  });
+
+  app.post("/admin/provider-login", async (request, reply) => {
+    try {
+      const session = await startProviderLogin({
+        provider: request.body?.provider || "codex",
+        workerId: request.body?.worker || request.body?.worker_id || "codex-1",
+        mode: request.body?.mode || "device",
+        config,
+      });
+      return reply.send({ status: "ok", session });
+    } catch (error) {
+      return sendProviderError(reply, error);
+    }
+  });
+
+  app.get("/admin/provider-login/:sessionId", async (request, reply) => {
+    try {
+      return reply.send({ status: "ok", session: getProviderLoginSession(request.params.sessionId) });
     } catch (error) {
       return sendProviderError(reply, error);
     }

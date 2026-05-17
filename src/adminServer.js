@@ -129,6 +129,39 @@ export async function buildAdminApp({
     }
   });
 
+  app.post("/admin/api/provider-login", async (request, reply) => {
+    try {
+      const login = await fetchJson(fetchImpl, apiBaseUrl, "/admin/provider-login", {
+        method: "POST",
+        body: request.body || {},
+      });
+      return reply.send(login);
+    } catch (error) {
+      return reply.code(502).send({
+        status: "error",
+        error: {
+          code: "llmhq_provider_login_failed",
+          message: error instanceof Error ? error.message : String(error),
+        },
+      });
+    }
+  });
+
+  app.get("/admin/api/provider-login/:sessionId", async (request, reply) => {
+    try {
+      const login = await fetchJson(fetchImpl, apiBaseUrl, `/admin/provider-login/${encodeURIComponent(request.params.sessionId)}`);
+      return reply.send(login);
+    } catch (error) {
+      return reply.code(502).send({
+        status: "error",
+        error: {
+          code: "llmhq_provider_login_status_failed",
+          message: error instanceof Error ? error.message : String(error),
+        },
+      });
+    }
+  });
+
   return app;
 }
 
@@ -378,6 +411,35 @@ function adminHtml({ apiBaseUrl }) {
       display: grid;
       gap: 10px;
     }
+    .tool-panel {
+      padding: 16px 18px 18px;
+      display: grid;
+      gap: 10px;
+    }
+    .action-state {
+      min-height: 20px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+    .action-state.ok { color: var(--green); }
+    .action-state.bad { color: var(--red); }
+    .log-output {
+      min-height: 150px;
+      max-height: 320px;
+      overflow: auto;
+      margin: 0;
+      padding: 12px;
+      border: 1px solid #dce4ee;
+      border-radius: 8px;
+      background: #0f172a;
+      color: #e5e7eb;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      font-size: 12px;
+      line-height: 1.5;
+    }
     textarea {
       width: 100%;
       min-height: 420px;
@@ -487,8 +549,22 @@ function adminHtml({ apiBaseUrl }) {
 
     <section class="wide">
       <div class="section-head">
+        <h2>Provider Login</h2>
+        <div class="actions">
+          <button id="start-codex-login" type="button">Start Codex Device Login</button>
+          <button id="probe-providers-top" type="button">Probe Providers</button>
+        </div>
+      </div>
+      <div class="tool-panel">
+        <div id="provider-login-state" class="action-state">Codex login runs inside the LLMHQ container and prints a device-code URL here.</div>
+        <pre id="provider-login-log" class="log-output">No provider login session started.</pre>
+      </div>
+    </section>
+
+    <section id="provider-probe-section" class="wide">
+      <div class="section-head">
         <h2>Provider Probe</h2>
-        <span class="hint">One minimal request per provider</span>
+        <span id="probe-state" class="hint">One minimal request per provider</span>
       </div>
       <div class="table-wrap">
         <table>
@@ -547,14 +623,23 @@ function adminHtml({ apiBaseUrl }) {
     const saveSettingsEl = document.getElementById("save-settings");
     const reloadSettingsEl = document.getElementById("reload-settings");
     const probeProvidersEl = document.getElementById("probe-providers");
+    const probeProvidersTopEl = document.getElementById("probe-providers-top");
+    const startCodexLoginEl = document.getElementById("start-codex-login");
     const settingsEditorEl = document.getElementById("settings-json");
     const settingsStateEl = document.getElementById("settings-state");
+    const probeStateEl = document.getElementById("probe-state");
+    const providerLoginStateEl = document.getElementById("provider-login-state");
+    const providerLoginLogEl = document.getElementById("provider-login-log");
     let settingsDirty = false;
+    let providerLoginPollTimer = null;
+    let providerLoginSessionId = null;
 
     refreshEl.addEventListener("click", loadSummary);
     saveSettingsEl.addEventListener("click", saveSettings);
     reloadSettingsEl.addEventListener("click", reloadSettings);
     probeProvidersEl.addEventListener("click", probeProviders);
+    probeProvidersTopEl.addEventListener("click", probeProviders);
+    startCodexLoginEl.addEventListener("click", startCodexLogin);
     settingsEditorEl.addEventListener("input", () => {
       settingsDirty = true;
       setSettingsState("Unsaved settings edits.", "");
@@ -652,7 +737,9 @@ function adminHtml({ apiBaseUrl }) {
 
     async function probeProviders() {
       setSettingsState("Probing providers...", "");
+      setProbeState("Probing providers...", "");
       probeProvidersEl.disabled = true;
+      probeProvidersTopEl.disabled = true;
       try {
         const response = await fetch("/admin/api/provider-probe", {
           method: "POST",
@@ -665,14 +752,80 @@ function adminHtml({ apiBaseUrl }) {
         }
         renderWorkers(Array.isArray(result.health?.providers) ? result.health.providers : []);
         renderProbe(result.results || []);
+        document.getElementById("provider-probe-section").scrollIntoView({ behavior: "smooth", block: "start" });
         setSettingsState(
+          result.status === "ok" ? "Provider probe passed." : "Provider probe found unavailable provider sessions.",
+          result.status === "ok" ? "ok" : "bad",
+        );
+        setProbeState(
           result.status === "ok" ? "Provider probe passed." : "Provider probe found unavailable provider sessions.",
           result.status === "ok" ? "ok" : "bad",
         );
       } catch (error) {
         setSettingsState(error.message || String(error), "bad");
+        setProbeState(error.message || String(error), "bad");
       } finally {
         probeProvidersEl.disabled = false;
+        probeProvidersTopEl.disabled = false;
+      }
+    }
+
+    async function startCodexLogin() {
+      startCodexLoginEl.disabled = true;
+      setProviderLoginState("Starting Codex device login...", "");
+      providerLoginLogEl.textContent = "Starting Codex device login...";
+      try {
+        const response = await fetch("/admin/api/provider-login", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ provider: "codex", worker: "codex-1", mode: "device" }),
+        });
+        const result = await response.json();
+        if (!response.ok) {
+          throw new Error(result?.error?.message || "Provider login failed to start");
+        }
+        providerLoginSessionId = result.session?.id;
+        renderProviderLogin(result.session);
+        pollProviderLogin();
+      } catch (error) {
+        setProviderLoginState(error.message || String(error), "bad");
+      } finally {
+        startCodexLoginEl.disabled = false;
+      }
+    }
+
+    async function pollProviderLogin() {
+      if (!providerLoginSessionId) {
+        return;
+      }
+      clearTimeout(providerLoginPollTimer);
+      try {
+        const response = await fetch("/admin/api/provider-login/" + encodeURIComponent(providerLoginSessionId), { cache: "no-store" });
+        const result = await response.json();
+        if (!response.ok) {
+          throw new Error(result?.error?.message || "Provider login status failed");
+        }
+        renderProviderLogin(result.session);
+        if (result.session?.status === "running") {
+          providerLoginPollTimer = setTimeout(pollProviderLogin, 1500);
+        }
+      } catch (error) {
+        setProviderLoginState(error.message || String(error), "bad");
+      }
+    }
+
+    function renderProviderLogin(session) {
+      if (!session) {
+        return;
+      }
+      providerLoginLogEl.textContent = session.output || "Waiting for Codex login output...";
+      providerLoginLogEl.scrollTop = providerLoginLogEl.scrollHeight;
+      if (session.status === "running") {
+        setProviderLoginState("Codex device login is running. Open the printed URL, enter the code, and finish Google login.", "");
+      } else if (session.status === "completed") {
+        setProviderLoginState("Codex login completed. Run Provider Probe to verify codex-gpt-5.5.", "ok");
+      } else {
+        setProviderLoginState("Codex login did not complete: " + session.status + ".", "bad");
       }
     }
 
@@ -763,8 +916,18 @@ function adminHtml({ apiBaseUrl }) {
       settingsStateEl.className = "save-state" + (kind ? " " + kind : "");
     }
 
+    function setProbeState(text, kind) {
+      probeStateEl.textContent = text;
+      probeStateEl.className = "action-state" + (kind ? " " + kind : "");
+    }
+
+    function setProviderLoginState(text, kind) {
+      providerLoginStateEl.textContent = text;
+      providerLoginStateEl.className = "action-state" + (kind ? " " + kind : "");
+    }
+
     function escapeHtml(value) {
-      return value.replace(/[&<>"']/g, (char) => ({
+      return String(value).replace(/[&<>"']/g, (char) => ({
         "&": "&amp;",
         "<": "&lt;",
         ">": "&gt;",
