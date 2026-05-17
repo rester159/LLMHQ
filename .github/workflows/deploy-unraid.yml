@@ -81,6 +81,7 @@ jobs:
             if docker exec llmhq node -e "fetch('http://127.0.0.1:8080/v1/models').then((r) => { if (!r.ok) process.exit(1); return r.text(); }).then((body) => console.log(body.slice(0, 500))).catch(() => process.exit(1))" \
               && docker run --rm --network host --entrypoint node "${host_probe_image}" -e "fetch('http://127.0.0.1:${host_port}/v1/models').then((r) => { if (!r.ok) process.exit(1); return r.text(); }).then((body) => console.log(body.slice(0, 500))).catch(() => process.exit(1))" \
               && docker run --rm --network host --entrypoint node "${host_probe_image}" -e "fetch('http://127.0.0.1:${webui_port}/admin').then((r) => { if (!r.ok) process.exit(1); return r.text(); }).then((body) => { if (!body.includes('LLMHQ Admin')) process.exit(1); console.log(body.slice(0, 120)); }).catch(() => process.exit(1))" \
+              && docker run --rm --network host --entrypoint node "${host_probe_image}" -e "fetch('http://127.0.0.1:${webui_port}/v1/models').then((r) => { if (!r.ok) process.exit(1); return r.text(); }).then((body) => console.log(body.slice(0, 500))).catch(() => process.exit(1))" \
               && docker inspect -f '{{.State.Running}}' llmhq-network-sync | grep -q true; then
               echo "${GITHUB_SHA}" > "${base}/current.sha"
               exit 0

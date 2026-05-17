@@ -15,6 +15,7 @@ Current server defaults:
 - Host URL from the server host: `http://127.0.0.1:18088`
 - Docker-to-Docker URL on same-server app networks: `http://llmhq:8080`
 - Unraid/admin WebUI: `http://<server-ip>:18089/admin`
+- Deliberate LAN validation/API proxy: `http://<server-ip>:18089`
 - Default chat model: `claude-sonnet`
 - Same-server auth mode in Compose: `LLMHQ_AUTH_MODE=none`
 
@@ -31,6 +32,13 @@ LLMHQ_BASE_URL=http://127.0.0.1:18088
 # Apps running as containers on the same server
 LLMHQ_BASE_URL=http://llmhq:8080
 ```
+
+```env
+# Desktop validation runner calling the Unraid LLMHQ WebUI proxy
+LLMHQ_BASE_URL=http://<server-ip>:18089
+```
+
+Use the WebUI proxy only when the caller is not on the Unraid Docker networks. Same-server containers should keep `http://llmhq:8080`; otherwise a local workstation with its own Docker `llmhq` container can accidentally hit a different LLMHQ instance.
 
 The Compose deployment also sets the Unraid WebUI label:
 
@@ -418,11 +426,19 @@ The admin WebUI exposes this as the Provider Probe button.
 
 Starts an admin provider-login helper inside the LLMHQ API container. This is for provider account authentication, not product-app authentication.
 
-The currently supported WebUI login flow is Codex device auth:
+The supported WebUI login flows are Claude browser login and Codex device auth:
 
 ```http
 POST /admin/provider-login
 Content-Type: application/json
+```
+
+```json
+{
+  "provider": "claude",
+  "worker": "claude-1",
+  "mode": "claudeai"
+}
 ```
 
 ```json
@@ -451,6 +467,8 @@ Example response:
 ```
 
 Open the printed device URL in any browser, enter the displayed code, and finish Google login. The login process writes the official Codex CLI tokens into the worker profile directory.
+
+For Claude, open the printed Claude OAuth URL and finish the official Claude Code login. The resulting session is written into the selected Claude worker profile directory.
 
 ### `GET /admin/provider-login/:sessionId`
 
@@ -1055,9 +1073,9 @@ Provider login is outside the product application API. It can be done through th
 WebUI setup:
 
 1. Open `http://<server-ip>:18089/admin`.
-2. Click `Start Codex Device Login`.
-3. Open the printed URL, enter the displayed device code, and finish Google login.
-4. Click `Provider Probe` and verify `codex-gpt-5.5`.
+2. Click `Start Claude Login` for Claude workers or `Start Codex Device Login` for Codex workers.
+3. Follow the printed official CLI login URL/device-code instructions.
+4. Click `Provider Probe` and verify the requested provider model, for example `claude-haiku` or `codex-gpt-5.5`.
 
 Docker setup:
 
@@ -1068,7 +1086,7 @@ docker compose exec llmhq npm run login:codex -- codex-1
 docker compose exec llmhq npm run login:chatgpt:vnc
 ```
 
-If Codex reports `token_invalidated` or `refresh_token_reused`, run the Codex login again for the LLMHQ worker profile. Do not fix this by copying `auth.json` from another machine or container profile; Codex refresh tokens rotate and copying them can invalidate one of the sessions.
+If Claude or Codex reports `auth_required`, `token_invalidated`, or `refresh_token_reused`, run provider login again for the LLMHQ worker profile and verify it with Provider Probe. Do not fix this by copying auth files from another machine or container profile; provider refresh tokens can rotate and copying them can invalidate one of the sessions.
 
 The ChatGPT noVNC helper exposes:
 
@@ -1149,9 +1167,11 @@ Use this decision table before changing payload code:
 
 | Symptom | Meaning | Fix |
 | --- | --- | --- |
+| 100% of `claude-haiku` calls fail with `auth_required` | The request reached LLMHQ and selected the Claude worker, but that LLMHQ instance's Claude profile cannot complete inference. | Run Provider Probe on the exact LLMHQ instance in the error's `llmhq.instance_id`, then use `Start Claude Login` for `claude-1`. |
+| Local desktop/CI run uses `http://llmhq:8080` and gets a different `llmhq.instance_id` than Unraid | The caller is resolving a workstation-local Docker container named `llmhq`, not the Unraid LLMHQ instance. | For desktop validation, set `LLMHQ_BASE_URL=http://<server-ip>:18089`; for deployed Unraid containers, keep `http://llmhq:8080`. |
 | `ENOTFOUND llmhq` | App container is not on a Docker network where the `llmhq` alias exists yet. | Keep `LLMHQ_BASE_URL=http://llmhq:8080`; verify the `llmhq-network-sync` container is running and wait for it to attach LLMHQ to the app network. |
 | Connection refused to `127.0.0.1` from an app container | The app is calling itself, not LLMHQ. | Use `http://llmhq:8080` from containers. |
-| Connection refused to `10.0.5.202:18088` from another machine | The host API port is loopback-only by design. | Use the WebUI on `http://10.0.5.202:18089/admin` from a browser; apps on the Unraid host use `http://127.0.0.1:18088`. |
+| Connection refused to `10.0.5.202:18088` from another machine | The host API port is loopback-only by design. | Use `http://10.0.5.202:18089` for desktop validation or `http://10.0.5.202:18089/admin` in a browser; apps on the Unraid host use `http://127.0.0.1:18088`. |
 | `invalid_request` | The JSON body does not match the endpoint contract. | Keep OpenAI-style `messages`, `model`, `fallback`, and `stream` fields for `/v1/chat/completions`. |
 | `auth_required` with an `attempts` entry | The request reached LLMHQ and selected a provider worker, but the provider CLI account is not authenticated or usable. | Re-login or fix the provider account in LLMHQ; the calling app should not change payload shape. |
 

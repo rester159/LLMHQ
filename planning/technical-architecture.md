@@ -25,7 +25,7 @@ flowchart LR
       Assets["Asset store\n/app/data/assets"]
     end
 
-    WebUI["Admin WebUI\n0.0.0.0:18089/admin"]
+    WebUI["Admin WebUI + /v1 proxy\n0.0.0.0:18089"]
 
     subgraph Workers["Provider workers"]
       Claude["Claude CLI worker\nclaude-1"]
@@ -121,6 +121,7 @@ Provider usability is separate from provider configuration. The admin provider p
 | --- | --- |
 | `GET /health` | Gateway and provider health. |
 | `GET /admin` | Admin WebUI. |
+| `/v1/*` on WebUI port `18089` | Proxy to the internal API for deliberate LAN validation callers. |
 | `GET /admin/settings` | Live runtime settings and rebuilt model list. |
 | `PUT /admin/settings` | Validate, persist, and apply runtime settings. |
 | `POST /admin/settings/reload` | Reload settings from disk and rebuild the registry. |
@@ -162,6 +163,7 @@ Default app URLs:
 - Product containers on the same Unraid server: `http://llmhq:8080`
 - Host-native apps on the Unraid server: `http://127.0.0.1:18088`
 - Browser/admin access from LAN: `http://<server-ip>:18089/admin`
+- Desktop validation callers that need the Unraid API from LAN: `http://<server-ip>:18089`
 
 ## Provider Profiles
 

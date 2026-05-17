@@ -8,14 +8,18 @@ const MAX_OUTPUT_CHARS = 12000;
 const LOGIN_TIMEOUT_MS = 15 * 60 * 1000;
 
 export async function startProviderLogin({ provider, workerId, config, mode = "device" }) {
-  if (provider !== "codex") {
-    throw new ProviderError("invalid_request", "Only codex provider login is currently supported from the WebUI.");
+  if (!["claude", "codex"].includes(provider)) {
+    throw new ProviderError("invalid_request", `Unsupported provider login: ${provider || "missing"}.`);
   }
-  if (mode !== "device") {
+  if (provider === "codex" && mode !== "device") {
     throw new ProviderError("invalid_request", "Codex WebUI login uses device auth.");
   }
+  if (provider === "claude" && !["claudeai", "sso", "console"].includes(mode)) {
+    throw new ProviderError("invalid_request", "Claude WebUI login mode must be claudeai, sso, or console.");
+  }
 
-  const worker = findWorker(config.codex, provider, workerId);
+  const providerConfig = config[provider];
+  const worker = findWorker(providerConfig, provider, workerId);
   const existing = findRunningSession(provider, worker.id);
   if (existing) {
     return snapshot(existing);
@@ -23,7 +27,9 @@ export async function startProviderLogin({ provider, workerId, config, mode = "d
 
   if (worker.profileDir) {
     await fs.mkdir(worker.profileDir, { recursive: true });
-    await fs.mkdir(path.join(worker.profileDir, ".codex"), { recursive: true });
+    if (provider === "codex") {
+      await fs.mkdir(path.join(worker.profileDir, ".codex"), { recursive: true });
+    }
   }
 
   const session = {
@@ -44,24 +50,16 @@ export async function startProviderLogin({ provider, workerId, config, mode = "d
   };
   sessions.set(session.id, session);
 
-  const command = config.codex.command || "codex";
-  const args = ["login", "--device-auth"];
-  appendOutput(session, `Starting Codex device login for ${worker.id}.\n`);
+  const command = providerConfig?.command || provider;
+  const args = provider === "claude" ? claudeLoginArgs(mode) : ["login", "--device-auth"];
+  appendOutput(session, `Starting ${provider} login for ${worker.id}.\n`);
   appendOutput(session, `Profile: ${worker.profileDir || "default"}\n`);
+  appendOutput(session, `Mode: ${mode}\n`);
 
   const shell = shouldUseShell(command);
   const child = spawn(shell ? buildShellCommand(command, args) : command, shell ? [] : args, {
     cwd: process.cwd(),
-    env: {
-      ...process.env,
-      ...(worker.profileDir
-        ? {
-            CODEX_HOME: worker.profileDir,
-            HOME: worker.profileDir,
-            USERPROFILE: worker.profileDir,
-          }
-        : {}),
-    },
+    env: providerLoginEnv(provider, worker),
     shell,
     windowsHide: true,
     stdio: ["ignore", "pipe", "pipe"],
@@ -98,7 +96,7 @@ export async function startProviderLogin({ provider, workerId, config, mode = "d
     session.status = code === 0 ? "completed" : "failed";
     session.finishedAt = new Date().toISOString();
     session.updatedAt = session.finishedAt;
-    appendOutput(session, `\nCodex login ${session.status} with exit code ${code}.\n`);
+    appendOutput(session, `\n${provider} login ${session.status} with exit code ${code}.\n`);
     clearTimeout(session.timer);
   });
 
@@ -122,6 +120,38 @@ function shouldUseShell(command) {
 
 function buildShellCommand(command, args) {
   return [command, ...args].map(quoteShellArg).join(" ");
+}
+
+function claudeLoginArgs(mode) {
+  const args = ["auth", "login"];
+  if (mode === "console") {
+    args.push("--console");
+  } else {
+    args.push("--claudeai");
+  }
+  if (mode === "sso") {
+    args.push("--sso");
+  }
+  return args;
+}
+
+function providerLoginEnv(provider, worker) {
+  if (!worker.profileDir) {
+    return process.env;
+  }
+  if (provider === "codex") {
+    return {
+      ...process.env,
+      CODEX_HOME: worker.profileDir,
+      HOME: worker.profileDir,
+      USERPROFILE: worker.profileDir,
+    };
+  }
+  return {
+    ...process.env,
+    HOME: worker.profileDir,
+    USERPROFILE: worker.profileDir,
+  };
 }
 
 function quoteShellArg(value) {

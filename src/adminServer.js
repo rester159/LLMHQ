@@ -6,6 +6,7 @@ const DEFAULT_API_BASE_URL = "http://127.0.0.1:8080";
 export async function buildAdminApp({
   fastify,
   llmhqBaseUrl = process.env.LLMHQ_ADMIN_API_BASE_URL || DEFAULT_API_BASE_URL,
+  v1ProxyEnabled = envFlag(process.env.LLMHQ_ADMIN_PROXY_V1, true),
   fetchImpl = fetch,
 } = {}) {
   const app = fastify || Fastify({ logger: true });
@@ -18,6 +19,10 @@ export async function buildAdminApp({
   app.get("/health", async () => {
     return { status: "ok", service: "llmhq-admin", api_base_url: apiBaseUrl };
   });
+
+  if (v1ProxyEnabled) {
+    app.all("/v1/*", async (request, reply) => proxyApiRequest(fetchImpl, apiBaseUrl, request, reply));
+  }
 
   app.get("/admin", async (_request, reply) => {
     return reply.type("text/html; charset=utf-8").send(adminHtml({ apiBaseUrl }));
@@ -167,6 +172,53 @@ export async function buildAdminApp({
 
 function normalizeBaseUrl(value) {
   return String(value || DEFAULT_API_BASE_URL).replace(/\/+$/, "");
+}
+
+function envFlag(value, defaultValue) {
+  if (value === undefined || value === null || value === "") {
+    return defaultValue;
+  }
+  return !["0", "false", "no", "off"].includes(String(value).trim().toLowerCase());
+}
+
+async function proxyApiRequest(fetchImpl, baseUrl, request, reply) {
+  const response = await fetchImpl(`${baseUrl}${request.url}`, {
+    method: request.method,
+    headers: proxyHeaders(request.headers),
+    body: proxyBody(request),
+  });
+  reply.code(response.status || 200);
+  const contentType = response.headers?.get?.("content-type");
+  if (contentType) {
+    reply.header("content-type", contentType);
+  }
+  const buffer = Buffer.from(await response.arrayBuffer());
+  return reply.send(buffer);
+}
+
+function proxyHeaders(headers) {
+  const forwarded = {};
+  for (const [key, value] of Object.entries(headers || {})) {
+    const normalized = key.toLowerCase();
+    if (["host", "connection", "content-length", "transfer-encoding"].includes(normalized)) {
+      continue;
+    }
+    forwarded[key] = value;
+  }
+  return forwarded;
+}
+
+function proxyBody(request) {
+  if (["GET", "HEAD"].includes(request.method)) {
+    return undefined;
+  }
+  if (request.body === undefined) {
+    return undefined;
+  }
+  if (Buffer.isBuffer(request.body) || typeof request.body === "string") {
+    return request.body;
+  }
+  return JSON.stringify(request.body);
 }
 
 async function fetchJson(fetchImpl, baseUrl, pathname, options = {}) {
@@ -536,12 +588,13 @@ function adminHtml({ apiBaseUrl }) {
       <div class="section-head">
         <h2>Provider Login</h2>
         <div class="actions">
+          <button id="start-claude-login" type="button">Start Claude Login</button>
           <button id="start-codex-login" type="button">Start Codex Device Login</button>
           <button id="probe-providers-top" type="button">Probe Providers</button>
         </div>
       </div>
       <div class="tool-panel">
-        <div id="provider-login-state" class="action-state">Codex login runs inside the LLMHQ container and prints a device-code URL here.</div>
+        <div id="provider-login-state" class="action-state">Provider login runs inside the LLMHQ container and prints the official CLI login output here.</div>
         <pre id="provider-login-log" class="log-output">No provider login session started.</pre>
       </div>
     </section>
@@ -624,6 +677,7 @@ function adminHtml({ apiBaseUrl }) {
     const reloadSettingsEl = document.getElementById("reload-settings");
     const probeProvidersEl = document.getElementById("probe-providers");
     const probeProvidersTopEl = document.getElementById("probe-providers-top");
+    const startClaudeLoginEl = document.getElementById("start-claude-login");
     const startCodexLoginEl = document.getElementById("start-codex-login");
     const settingsEditorEl = document.getElementById("settings-json");
     const settingsStateEl = document.getElementById("settings-state");
@@ -639,7 +693,8 @@ function adminHtml({ apiBaseUrl }) {
     reloadSettingsEl.addEventListener("click", reloadSettings);
     probeProvidersEl.addEventListener("click", probeProviders);
     probeProvidersTopEl.addEventListener("click", probeProviders);
-    startCodexLoginEl.addEventListener("click", startCodexLogin);
+    startClaudeLoginEl.addEventListener("click", () => startProviderLogin("claude", "claude-1", "claudeai"));
+    startCodexLoginEl.addEventListener("click", () => startProviderLogin("codex", "codex-1", "device"));
     settingsEditorEl.addEventListener("input", () => {
       settingsDirty = true;
       setSettingsState("Unsaved settings edits.", "");
@@ -770,15 +825,16 @@ function adminHtml({ apiBaseUrl }) {
       }
     }
 
-    async function startCodexLogin() {
+    async function startProviderLogin(provider, worker, mode) {
+      startClaudeLoginEl.disabled = true;
       startCodexLoginEl.disabled = true;
-      setProviderLoginState("Starting Codex device login...", "");
-      providerLoginLogEl.textContent = "Starting Codex device login...";
+      setProviderLoginState("Starting " + provider + " login...", "");
+      providerLoginLogEl.textContent = "Starting " + provider + " login...";
       try {
         const response = await fetch("/admin/api/provider-login", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ provider: "codex", worker: "codex-1", mode: "device" }),
+          body: JSON.stringify({ provider, worker, mode }),
         });
         const result = await response.json();
         if (!response.ok) {
@@ -790,6 +846,7 @@ function adminHtml({ apiBaseUrl }) {
       } catch (error) {
         setProviderLoginState(error.message || String(error), "bad");
       } finally {
+        startClaudeLoginEl.disabled = false;
         startCodexLoginEl.disabled = false;
       }
     }
@@ -821,11 +878,11 @@ function adminHtml({ apiBaseUrl }) {
       providerLoginLogEl.textContent = session.output || "Waiting for Codex login output...";
       providerLoginLogEl.scrollTop = providerLoginLogEl.scrollHeight;
       if (session.status === "running") {
-        setProviderLoginState("Codex device login is running. Open the printed URL, enter the code, and finish Google login.", "");
+        setProviderLoginState(session.provider + " login is running. Open the printed URL or follow the printed CLI instructions.", "");
       } else if (session.status === "completed") {
-        setProviderLoginState("Codex login completed. Run Provider Probe to verify codex-gpt-5.5.", "ok");
+        setProviderLoginState(session.provider + " login completed. Run Provider Probe to verify the worker.", "ok");
       } else {
-        setProviderLoginState("Codex login did not complete: " + session.status + ".", "bad");
+        setProviderLoginState(session.provider + " login did not complete: " + session.status + ".", "bad");
       }
     }
 
