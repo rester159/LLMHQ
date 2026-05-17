@@ -12,6 +12,7 @@ import { ChatGptImageBrowserWorker } from "./providers/chatgptImageBrowserWorker
 import { FakeChatWorker } from "./providers/fakeChatWorker.js";
 import { FakeImageWorker } from "./providers/fakeImageWorker.js";
 import { getProviderLoginSession, startProviderLogin } from "./providerLogin.js";
+import { llmhqInstance } from "./instance.js";
 import { createModelRegistry } from "./registry.js";
 import { defaultRuntimeSettings, SettingsStore } from "./settingsStore.js";
 
@@ -45,6 +46,7 @@ export async function buildApp({
   app.get("/health", async () => {
     return {
       status: "ok",
+      instance: llmhqInstance(),
       auth_mode: config.authMode,
       providers: await runtime.registry.health(),
     };
@@ -571,6 +573,7 @@ async function tryModelWithFallbacks(
 ) {
   const candidateIds = candidateModelIds(model, fallbackPolicy);
   let lastError = null;
+  const failedFailureDomains = new Map();
 
   for (const candidateId of candidateIds) {
     const candidate = registry.get(candidateId);
@@ -578,6 +581,35 @@ async function tryModelWithFallbacks(
     onStatus?.("model_attempt", `Trying ${candidate.id}.`, { model: candidate.id });
 
     for (const worker of workers) {
+      const failureDomain = workerFailureDomain(worker);
+      const domainFailure = failedFailureDomains.get(failureDomain);
+      if (domainFailure) {
+        const skippedError = new ProviderError(
+          domainFailure.code,
+          `${worker.id} shares failure domain ${failureDomain}, which already failed with ${domainFailure.code}.`,
+          {
+            authStatus: domainFailure.details?.authStatus || null,
+            output: providerDiagnostic(domainFailure),
+          },
+        );
+        attempts.push({
+          model: candidate.id,
+          worker: worker.id,
+          failure_domain: failureDomain,
+          status: "skipped",
+          ...providerErrorFields(skippedError),
+        });
+        onStatus?.("worker_skipped", `${worker.id} skipped: shared failure domain.`, {
+          model: candidate.id,
+          worker: worker.id,
+          failure_domain: failureDomain,
+          code: skippedError.code,
+          auth_status: skippedError.details?.authStatus || null,
+        });
+        lastError = skippedError;
+        continue;
+      }
+
       const unavailable = workerUnavailable(worker);
       if (unavailable) {
         const skippedError = new ProviderError(
@@ -592,6 +624,7 @@ async function tryModelWithFallbacks(
         attempts.push({
           model: candidate.id,
           worker: worker.id,
+          failure_domain: failureDomain,
           status: "skipped",
           ...providerErrorFields(skippedError),
           retry_at: unavailable.retryAt,
@@ -599,6 +632,7 @@ async function tryModelWithFallbacks(
         onStatus?.("worker_skipped", `${worker.id} skipped: ${unavailable.code}.`, {
           model: candidate.id,
           worker: worker.id,
+          failure_domain: failureDomain,
           code: unavailable.code,
           auth_status: unavailable.authStatus,
           retry_at: unavailable.retryAt,
@@ -608,21 +642,28 @@ async function tryModelWithFallbacks(
       }
 
       try {
-        attempts.push({ model: candidate.id, worker: worker.id, status: "started" });
+        attempts.push({ model: candidate.id, worker: worker.id, failure_domain: failureDomain, status: "started" });
         onStatus?.("worker_started", `Running ${candidate.id} on ${worker.id}.`, {
           model: candidate.id,
           worker: worker.id,
+          failure_domain: failureDomain,
         });
         const result = await worker[method]({
           ...input,
           model: candidate,
           onStatus: (stage, message, details = {}) =>
-            onStatus?.(stage, message, { model: candidate.id, worker: worker.id, ...details }),
+            onStatus?.(stage, message, { model: candidate.id, worker: worker.id, failure_domain: failureDomain, ...details }),
         });
-        attempts[attempts.length - 1] = { model: candidate.id, worker: worker.id, status: "succeeded" };
+        attempts[attempts.length - 1] = {
+          model: candidate.id,
+          worker: worker.id,
+          failure_domain: failureDomain,
+          status: "succeeded",
+        };
         onStatus?.("worker_completed", `${worker.id} completed.`, {
           model: candidate.id,
           worker: worker.id,
+          failure_domain: failureDomain,
         });
         return {
           ...result,
@@ -634,16 +675,21 @@ async function tryModelWithFallbacks(
         attempts[attempts.length - 1] = {
           model: candidate.id,
           worker: worker.id,
+          failure_domain: failureDomain,
           status: "failed",
           ...providerErrorFields(providerError),
         };
         onStatus?.("worker_failed", `${worker.id} failed: ${providerError.code}.`, {
           model: candidate.id,
           worker: worker.id,
+          failure_domain: failureDomain,
           code: providerError.code,
           auth_status: providerError.details?.authStatus || null,
         });
         markWorkerUnavailable(worker, providerError, workerFailureCooldownMs);
+        if (stickyWorkerFailure(providerError.code)) {
+          failedFailureDomains.set(failureDomain, providerError);
+        }
         lastError = providerError;
       }
     }
@@ -654,6 +700,10 @@ async function tryModelWithFallbacks(
     throw lastError;
   }
   throw new ProviderError("provider_error", "No provider succeeded.", { attempts });
+}
+
+function workerFailureDomain(worker) {
+  return worker.failureDomain || worker.id;
 }
 
 function workerUnavailable(worker) {
@@ -752,6 +802,7 @@ function createChatCompletionResponse({ requestedModel, result, attempts, status
     requested_model: requestedModel,
     used_model: result.usedModel,
     used_worker: result.usedWorker,
+    llmhq: llmhqInstance(),
     fallback_used: result.usedModel !== requestedModel,
     fallback_reason: firstFailureReason(attempts),
     attempts,
@@ -897,6 +948,7 @@ function sendProviderError(reply, error) {
         : 503;
   return reply.code(status).send({
     error: {
+      llmhq: llmhqInstance(),
       ...providerErrorFields(providerError),
       details: providerError.details,
       attempts: providerError.details?.attempts || [],
