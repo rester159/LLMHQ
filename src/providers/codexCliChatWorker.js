@@ -30,7 +30,7 @@ export class CodexCliChatWorker {
     return this.#runExclusive(async () => {
       if (this.profileDir) {
         onStatus?.("profile_ready", `Preparing ${this.id} profile.`);
-        await fs.mkdir(this.profileDir, { recursive: true });
+        await prepareCodexProfile(this.profileDir);
       }
       onStatus?.("workspace_ready", `Preparing Codex workdir for ${this.id}.`);
       await fs.mkdir(this.workdir, { recursive: true });
@@ -60,7 +60,13 @@ export class CodexCliChatWorker {
         command: this.command,
         args,
         input: prompt,
-        env: this.profileDir ? { CODEX_HOME: this.profileDir } : {},
+        env: this.profileDir
+          ? {
+              CODEX_HOME: this.profileDir,
+              HOME: this.profileDir,
+              USERPROFILE: this.profileDir,
+            }
+          : {},
         cwd: this.workdir,
         timeoutMs: this.timeoutMs,
       });
@@ -92,6 +98,33 @@ export class CodexCliChatWorker {
     } finally {
       release();
     }
+  }
+}
+
+async function prepareCodexProfile(profileDir) {
+  await fs.mkdir(profileDir, { recursive: true });
+  const nestedDir = path.join(profileDir, ".codex");
+  await fs.mkdir(nestedDir, { recursive: true });
+  await mirrorProfileFile(path.join(profileDir, "auth.json"), path.join(nestedDir, "auth.json"));
+  await mirrorProfileFile(path.join(profileDir, "config.toml"), path.join(nestedDir, "config.toml"));
+}
+
+async function mirrorProfileFile(directPath, nestedPath) {
+  const directExists = await fileExists(directPath);
+  const nestedExists = await fileExists(nestedPath);
+  if (directExists && !nestedExists) {
+    await fs.copyFile(directPath, nestedPath);
+  } else if (!directExists && nestedExists) {
+    await fs.copyFile(nestedPath, directPath);
+  }
+}
+
+async function fileExists(filePath) {
+  try {
+    const stat = await fs.stat(filePath);
+    return stat.isFile();
+  } catch {
+    return false;
   }
 }
 

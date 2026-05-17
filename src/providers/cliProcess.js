@@ -79,24 +79,34 @@ function quoteShellArg(value) {
 
 export function classifyCliFailure(output, exitCode = 1) {
   const text = output || "";
+  const sanitizedOutput = sanitizeDiagnostic(text);
   const lower = text.toLowerCase();
 
   if (lower.includes("login") || lower.includes("auth") || lower.includes("oauth") || lower.includes("unauthorized")) {
     return new ProviderError("auth_required", "Provider CLI is not authenticated.", {
       exitCode,
-      output: text.slice(0, 2000),
+      output: sanitizedOutput,
     });
   }
 
   if (lower.includes("rate limit") || lower.includes("too many requests") || lower.includes("usage limit")) {
     return new ProviderError("rate_limited", "Provider CLI is rate limited.", {
       exitCode,
-      output: text.slice(0, 2000),
+      output: sanitizedOutput,
     });
   }
 
   return new ProviderError("provider_error", "Provider CLI failed.", {
     exitCode,
-    output: text.slice(0, 2000),
+    output: sanitizedOutput,
   });
+}
+
+function sanitizeDiagnostic(value) {
+  return String(value || "")
+    .replace(/(api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|authorization)(["'\s:=]+)([^"'\s,}]+)/gi, "$1$2[redacted]")
+    .replace(/Bearer\s+[A-Za-z0-9._~+/-]+=*/gi, "Bearer [redacted]")
+    .replace(/sk-[A-Za-z0-9_-]{20,}/g, "sk-[redacted]")
+    .replace(/[A-Za-z0-9_-]{40,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}/g, "[jwt-redacted]")
+    .slice(0, 2000);
 }
