@@ -4,6 +4,7 @@ import { loadConfig } from "./config.js";
 import {
   ConversationStore,
   conversationContextMessages,
+  extractConversationContext,
   extractConversationInputMessages,
 } from "./conversations.js";
 import { ProviderError, toProviderError } from "./errors.js";
@@ -90,6 +91,7 @@ export async function buildApp({
         title: body.title,
         defaultModel: body.default_model,
         metadata: body.metadata,
+        context: body.context,
       });
       return reply.code(created ? 201 : 200).send({
         conversation: conversations.summarize(conversation),
@@ -148,6 +150,7 @@ export async function buildApp({
         title: body.title,
         defaultModel: body.default_model,
         metadata: body.metadata,
+        context: body.context,
       });
       const result = await runConversationTurn({
         activeRegistry,
@@ -236,9 +239,12 @@ export async function buildApp({
 
 async function runConversationTurn({ activeRegistry, config, conversations, conversation, body }) {
   const inputMessages = extractConversationInputMessages(body);
+  const context = extractConversationContext(body);
+  const conversationWithContext =
+    context === undefined ? conversation : await conversations.updateContext(conversation.id, context);
   const model = body.model || conversation.default_model || config.chat?.defaultModel || activeRegistry.defaultModel("chat");
   const contextMessages = conversationContextMessages(
-    conversation,
+    conversationWithContext,
     inputMessages,
     config.chat?.maxConversationMessages || 60,
   );
@@ -252,7 +258,7 @@ async function runConversationTurn({ activeRegistry, config, conversations, conv
     },
     messages: contextMessages,
   });
-  const updated = await conversations.appendTurn(conversation.id, {
+  const updated = await conversations.appendTurn(conversationWithContext.id, {
     inputMessages,
     assistantMessage: completion.choices[0].message,
     completion,
@@ -265,6 +271,8 @@ async function runConversationTurn({ activeRegistry, config, conversations, conv
       conversation_id: updated.id,
       project_id: updated.project_id,
       conversation_key: updated.conversation_key,
+      context_message_count: updated.context?.messages?.length || 0,
+      context_updated_at: updated.context?.updated_at || null,
     },
   };
 }

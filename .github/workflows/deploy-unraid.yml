@@ -1,0 +1,87 @@
+name: Deploy LLMHQ to Unraid
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: llmhq-unraid-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: "24"
+  LLMHQ_DEPLOY_PATH: ${{ vars.LLMHQ_DEPLOY_PATH || '/mnt/user/appdata/llmhq' }}
+
+jobs:
+  verify:
+    name: Verify
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Test
+        run: npm test
+
+  deploy:
+    name: Deploy
+    needs: verify
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure SSH
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "${{ secrets.UNRAID_SSH_KEY }}" > ~/.ssh/unraid_deploy
+          chmod 600 ~/.ssh/unraid_deploy
+          printf '%s\n' "${{ secrets.UNRAID_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+
+      - name: Package source
+        run: |
+          tar \
+            --exclude='.git' \
+            --exclude='node_modules' \
+            --exclude='data' \
+            --exclude='tmp' \
+            -czf "/tmp/llmhq-${GITHUB_SHA}.tgz" .
+
+      - name: Upload release
+        run: |
+          scp -i ~/.ssh/unraid_deploy "/tmp/llmhq-${GITHUB_SHA}.tgz" \
+            "${{ secrets.UNRAID_USER }}@${{ secrets.UNRAID_HOST }}:/tmp/llmhq-${GITHUB_SHA}.tgz"
+
+      - name: Deploy on Unraid
+        run: |
+          ssh -i ~/.ssh/unraid_deploy "${{ secrets.UNRAID_USER }}@${{ secrets.UNRAID_HOST }}" \
+            "GITHUB_SHA='${GITHUB_SHA}' LLMHQ_DEPLOY_PATH='${LLMHQ_DEPLOY_PATH}' bash -s" <<'REMOTE'
+          set -euo pipefail
+          base="${LLMHQ_DEPLOY_PATH}"
+          source_next="${base}/source.next"
+
+          mkdir -p "${base}/data"
+          rm -rf "${source_next}"
+          mkdir -p "${source_next}"
+          tar -xzf "/tmp/llmhq-${GITHUB_SHA}.tgz" -C "${source_next}"
+          rm -rf "${base}/source"
+          mv "${source_next}" "${base}/source"
+
+          docker network create llmhq_private >/dev/null 2>&1 || true
+          LLMHQ_DATA_DIR="${base}/data" docker compose -p llmhq -f "${base}/source/compose.yaml" up -d --build llmhq
+          echo "${GITHUB_SHA}" > "${base}/current.sha"
+          docker exec llmhq node -e "fetch('http://127.0.0.1:8080/v1/models').then((r) => { if (!r.ok) process.exit(1); return r.text(); }).then((body) => console.log(body.slice(0, 500)))"
+          REMOTE

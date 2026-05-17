@@ -135,8 +135,11 @@ Optional fields:
 - `model`
 - `fallback`
 - `metadata`
+- `context`
 
 LLMHQ must create the conversation on first use and append future turns to the same conversation when the same `project_id + conversation_key` is used.
+
+Apps may provide `context` as a generic, app-owned context block. LLMHQ must store it separately from chat turns, prepend it to future model calls, and avoid app-specific assumptions about what the context means.
 
 ### Conversation Inspection
 
@@ -225,4 +228,3 @@ Default Compose behavior:
 - Add a formal vision endpoint for image input once the target provider contract is stable.
 - Add backup/restore instructions for `./data`.
 - Add retention policy controls for conversations and generated assets.
-

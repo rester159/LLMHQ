@@ -473,6 +473,69 @@ test("conversation messages endpoint stores history without app-held conversatio
   );
 });
 
+test("conversation messages persist app context ahead of history", async () => {
+  const assetDir = path.join(os.tmpdir(), `llmhq-test-${Date.now()}-conversation-context`);
+  const seen = [];
+  const registry = createModelRegistry({
+    fakeChatModels: [
+      {
+        id: "claude-sonnet",
+        workers: [
+          {
+            id: "recording-worker",
+            async generateChat({ messages }) {
+              seen.push(messages);
+              return {
+                content: "context ok",
+                providerMetadata: {},
+              };
+            },
+          },
+        ],
+        fallback: [],
+      },
+    ],
+  });
+  const app = await buildApp({
+    fastify: Fastify(),
+    config: { ...testConfig(assetDir), authMode: "none" },
+    registry,
+    assetStore: new AssetStore(assetDir),
+  });
+
+  const response = await app.inject({
+    method: "POST",
+    url: "/v1/conversations/messages",
+    payload: {
+      project_id: "inventory-app",
+      conversation_key: "catalog-review",
+      default_model: "claude-sonnet",
+      context: {
+        summary: "Catalog app reviewing batch abc123.",
+        metadata: { app: "inventory", workflow: "catalog-review" },
+        messages: [{ role: "system", content: "Use application-provided catalog context." }],
+      },
+      message: { role: "user", content: "first turn" },
+    },
+  });
+
+  assert.equal(response.statusCode, 200);
+  const body = response.json();
+  assert.equal(body.conversation.context_message_count, 2);
+  assert.equal(body.chat_completion.context_message_count, 2);
+  assert.equal(seen[0][0].role, "system");
+  assert.match(seen[0][0].content, /Application context summary/);
+  assert.equal(seen[0][1].content, "Use application-provided catalog context.");
+  assert.equal(seen[0][2].content, "first turn");
+
+  const stored = await app.inject({
+    method: "GET",
+    url: `/v1/conversations/${body.conversation.id}`,
+  });
+  assert.equal(stored.statusCode, 200);
+  assert.equal(stored.json().conversation.context_message_count, 2);
+});
+
 test("conversation messages can continue by conversation id", async () => {
   const assetDir = path.join(os.tmpdir(), `llmhq-test-${Date.now()}-conversation-id`);
   const registry = createModelRegistry({

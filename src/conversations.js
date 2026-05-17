@@ -8,7 +8,7 @@ export class ConversationStore {
     this.conversationDir = conversationDir;
   }
 
-  async create({ projectId, conversationKey = null, title = null, defaultModel = null, metadata = {} }) {
+  async create({ projectId, conversationKey = null, title = null, defaultModel = null, metadata = {}, context = null }) {
     const normalizedProjectId = normalizeRequiredId(projectId, "project_id");
     const now = new Date().toISOString();
     const existing =
@@ -24,6 +24,7 @@ export class ConversationStore {
       title: title == null ? null : String(title),
       default_model: defaultModel == null ? null : String(defaultModel),
       metadata: isPlainObject(metadata) ? metadata : {},
+      context: normalizeContext(context, now),
       messages: [],
       created_at: now,
       updated_at: now,
@@ -65,9 +66,25 @@ export class ConversationStore {
 
   async getOrCreate(input) {
     if (input.conversationId) {
-      return { conversation: await this.require(input.conversationId), created: false };
+      const conversation = await this.require(input.conversationId);
+      return { conversation, created: false };
     }
     return this.create(input);
+  }
+
+  async updateContext(conversationId, context) {
+    if (context === undefined) {
+      return this.require(conversationId);
+    }
+    const conversation = await this.require(conversationId);
+    const now = new Date().toISOString();
+    const updated = {
+      ...conversation,
+      context: normalizeContext(context, now),
+      updated_at: now,
+    };
+    await this.#write(updated);
+    return updated;
   }
 
   async list({ projectId = null } = {}) {
@@ -128,6 +145,10 @@ export class ConversationStore {
       title: conversation.title,
       default_model: conversation.default_model,
       metadata: conversation.metadata,
+      context_message_count: Array.isArray(conversation.context?.messages)
+        ? conversation.context.messages.length
+        : 0,
+      context_updated_at: conversation.context?.updated_at || null,
       message_count: conversation.messages.length,
       created_at: conversation.created_at,
       updated_at: conversation.updated_at,
@@ -160,18 +181,31 @@ export function extractConversationInputMessages(body) {
   throw new ProviderError("invalid_request", "message or non-empty messages is required.");
 }
 
+export function extractConversationContext(body) {
+  if (!Object.prototype.hasOwnProperty.call(body || {}, "context")) {
+    return undefined;
+  }
+  return body.context;
+}
+
 export function conversationContextMessages(conversation, inputMessages, maxMessages) {
+  const contextMessages = Array.isArray(conversation.context?.messages)
+    ? conversation.context.messages.map((message) => ({
+        role: message.role,
+        content: message.content,
+      }))
+    : [];
   const existing = conversation.messages.map((message) => ({
     role: message.role,
     content: message.content,
   }));
   const combined = [...existing, ...inputMessages];
   if (!maxMessages || combined.length <= maxMessages) {
-    return combined;
+    return [...contextMessages, ...combined];
   }
   const systemMessages = combined.filter((message) => message.role === "system");
   const tail = combined.filter((message) => message.role !== "system").slice(-maxMessages);
-  return [...systemMessages.slice(0, 1), ...tail];
+  return [...contextMessages, ...systemMessages.slice(0, 1), ...tail];
 }
 
 function normalizeMessage(message) {
@@ -193,4 +227,40 @@ function normalizeRequiredId(value, fieldName) {
 
 function isPlainObject(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizeContext(context, now) {
+  if (context == null) {
+    return {
+      messages: [],
+      metadata: {},
+      updated_at: now,
+    };
+  }
+  if (!isPlainObject(context)) {
+    throw new ProviderError("invalid_request", "context must be an object.");
+  }
+
+  const messages = [];
+  if (context.summary != null && String(context.summary).trim()) {
+    messages.push({
+      role: "system",
+      content: `Application context summary:\n${String(context.summary).trim()}`,
+      created_at: now,
+    });
+  }
+  if (Array.isArray(context.messages)) {
+    messages.push(
+      ...context.messages.map((message) => ({
+        ...normalizeMessage(message),
+        created_at: now,
+      })),
+    );
+  }
+
+  return {
+    messages,
+    metadata: isPlainObject(context.metadata) ? context.metadata : {},
+    updated_at: now,
+  };
 }
