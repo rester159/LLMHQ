@@ -553,15 +553,20 @@ async function tryModelWithFallbacks(
     for (const worker of workers) {
       const unavailable = workerUnavailable(worker);
       if (unavailable) {
+        const skippedError = new ProviderError(
+          unavailable.code,
+          `${worker.id} is unavailable until ${unavailable.retryAt} because the last provider attempt failed with ${unavailable.code}.`,
+          {
+            authStatus: unavailable.authStatus,
+            output: unavailable.diagnostic,
+            retryAt: unavailable.retryAt,
+          },
+        );
         attempts.push({
           model: candidate.id,
           worker: worker.id,
           status: "skipped",
-          code: unavailable.code,
-          message: `Skipped because ${worker.id} is marked unavailable until ${unavailable.retryAt}.`,
-          retryable: true,
-          auth_status: unavailable.authStatus,
-          diagnostic: unavailable.diagnostic,
+          ...providerErrorFields(skippedError),
           retry_at: unavailable.retryAt,
         });
         onStatus?.("worker_skipped", `${worker.id} skipped: ${unavailable.code}.`, {
@@ -571,6 +576,7 @@ async function tryModelWithFallbacks(
           auth_status: unavailable.authStatus,
           retry_at: unavailable.retryAt,
         });
+        lastError = skippedError;
         continue;
       }
 
