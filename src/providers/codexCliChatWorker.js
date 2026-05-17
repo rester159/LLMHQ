@@ -26,11 +26,13 @@ export class CodexCliChatWorker {
     };
   }
 
-  async generateChat({ messages, model }) {
+  async generateChat({ messages, model, onStatus }) {
     return this.#runExclusive(async () => {
       if (this.profileDir) {
+        onStatus?.("profile_ready", `Preparing ${this.id} profile.`);
         await fs.mkdir(this.profileDir, { recursive: true });
       }
+      onStatus?.("workspace_ready", `Preparing Codex workdir for ${this.id}.`);
       await fs.mkdir(this.workdir, { recursive: true });
 
       const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "llmhq-codex-"));
@@ -53,6 +55,7 @@ export class CodexCliChatWorker {
         "-",
       ];
 
+      onStatus?.("provider_running", `Waiting for Codex CLI response from ${this.id}.`);
       const result = await runCli({
         command: this.command,
         args,
@@ -62,6 +65,7 @@ export class CodexCliChatWorker {
         timeoutMs: this.timeoutMs,
       });
 
+      onStatus?.("response_received", `Received Codex CLI response from ${this.id}.`);
       const output = await fs.readFile(outputFile, "utf8").catch(() => parseCodexJsonl(result.stdout));
       await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
 
