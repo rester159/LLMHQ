@@ -7,6 +7,8 @@ import Fastify from "fastify";
 import { buildAdminApp } from "../src/adminServer.js";
 import { buildApp } from "../src/app.js";
 import { AssetStore } from "../src/assets.js";
+import { ProviderError } from "../src/errors.js";
+import { classifyCliFailure } from "../src/providers/cliProcess.js";
 import { FakeChatWorker } from "../src/providers/fakeChatWorker.js";
 import { FakeImageWorker } from "../src/providers/fakeImageWorker.js";
 import { createModelRegistry } from "../src/registry.js";
@@ -412,6 +414,76 @@ test("chat completions can disable fallback", async () => {
   const body = response.json();
   assert.equal(body.error.code, "auth_required");
   assert.equal(body.error.attempts.length, 1);
+});
+
+test("chat completion errors expose exact provider auth diagnostics", async () => {
+  const assetDir = path.join(os.tmpdir(), `llmhq-test-${Date.now()}-auth-diagnostics`);
+  const registry = createModelRegistry({
+    fakeChatModels: [
+      {
+        id: "codex-gpt-5.5",
+        provider: "codex",
+        workers: [
+          {
+            id: "codex-1",
+            async health() {
+              return { id: "codex-1", status: "ready", capabilities: ["chat"] };
+            },
+            async generateChat() {
+              throw new ProviderError(
+                "auth_required",
+                "Provider CLI token has been invalidated. Re-authenticate the LLMHQ worker profile.",
+                {
+                  authStatus: "refresh_token_reused",
+                  output: "token_invalidated refresh_token: should-not-leak access_token=also-secret",
+                },
+              );
+            },
+          },
+        ],
+        fallback: [],
+      },
+    ],
+  });
+  const app = await buildApp({
+    fastify: Fastify(),
+    config: { ...testConfig(assetDir), authMode: "none" },
+    registry,
+    assetStore: new AssetStore(assetDir),
+  });
+
+  const response = await app.inject({
+    method: "POST",
+    url: "/v1/chat/completions",
+    payload: {
+      model: "codex-gpt-5.5",
+      fallback: "none",
+      messages: [{ role: "user", content: "hello" }],
+    },
+  });
+
+  assert.equal(response.statusCode, 503);
+  const body = response.json();
+  assert.equal(body.error.code, "auth_required");
+  assert.equal(body.error.retryable, false);
+  assert.equal(body.error.auth_status, "refresh_token_reused");
+  assert.match(body.error.diagnostic, /token_invalidated/);
+  assert.doesNotMatch(body.error.diagnostic, /should-not-leak|also-secret/);
+  assert.equal(body.error.attempts[0].auth_status, "refresh_token_reused");
+  assert.equal(body.error.attempts[0].retryable, false);
+});
+
+test("cli auth failures classify invalidated tokens with repair details", () => {
+  const error = classifyCliFailure(
+    "Your authentication token has been invalidated. code: token_invalidated. refresh_token: secret-refresh. code: refresh_token_reused",
+    1,
+  );
+
+  assert.equal(error.code, "auth_required");
+  assert.equal(error.details.authStatus, "refresh_token_reused");
+  assert.equal(error.details.repair, "reauthenticate_worker_profile");
+  assert.match(error.message, /Re-authenticate/);
+  assert.doesNotMatch(error.details.output, /secret-refresh/);
 });
 
 test("chat completions support streaming shape", async () => {

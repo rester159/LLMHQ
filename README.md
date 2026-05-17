@@ -71,6 +71,8 @@ docker compose exec llmhq npm run doctor
 
 Follow the OAuth URL/device-code prompts from your normal browser. The resulting tokens live under `./data/profiles/...`, so keep `./data` backed up and persistent.
 
+If a downstream app receives `auth_required` with `auth_status` such as `token_invalidated` or `refresh_token_reused`, the app is calling LLMHQ correctly and the provider worker profile needs re-login inside LLMHQ. Do not copy Codex auth files between machines or containers; refresh-token reuse can invalidate a session. Re-run the LLMHQ Codex login for the affected worker and then use the WebUI Provider Probe to confirm the route.
+
 ## Chat/Coding Calls
 
 From each host-native product app, configure only the LLMHQ base URL:
@@ -241,6 +243,7 @@ Invoke-RestMethod `
 - The default Compose setup publishes the admin WebUI on `http://<server-ip>:18089/admin` and adds the Unraid `net.unraid.docker.webui` label.
 - Runtime model aliases, provider profile directories, provider-native model arguments, default model, and fallback chains are stored in `./data/settings.json` by default and can be edited through the admin WebUI.
 - The admin WebUI includes a Provider Probe button that sends a minimal request per provider and exposes `auth_required` as an LLMHQ/provider-session problem before product apps hit it.
+- Provider failure responses include `retryable`, `auth_status`, and sanitized `diagnostic` fields so product apps can report provider account problems accurately instead of treating them as payload format errors.
 - If a provider worker fails with sticky state such as `auth_required`, LLMHQ marks that worker unavailable briefly and skips other aliases using the same worker so fallback can reach a different provider faster.
 - Claude and Codex workers use persistent profile directories under `./data/profiles/...`.
 - Stored conversations live under `./data/conversations`.
