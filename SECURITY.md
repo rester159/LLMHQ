@@ -34,7 +34,7 @@ Provider sessions are stored under `./data` when using the default Compose setup
 
 Use `LLMHQ_AUTH_MODE=token` and `LLMHQ_API_KEYS` if the service is reachable outside a trusted local boundary.
 
-The admin WebUI service is separate from the private API port. It exposes status/model summaries and proxies runtime settings updates to LLMHQ, but it does not proxy chat, image, or conversation endpoints. Treat the WebUI as a trusted LAN-only control surface.
+The admin WebUI service is separate from the private API port. It exposes status/model summaries, proxies runtime settings updates, and can run minimal provider probes. It does not proxy arbitrary chat, image, or conversation endpoints. Treat the WebUI as a trusted LAN-only control surface.
 
 ## Reporting Issues
 

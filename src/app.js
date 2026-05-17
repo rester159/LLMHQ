@@ -116,6 +116,54 @@ export async function buildApp({
     }
   });
 
+  app.post("/admin/provider-probe", async (request, reply) => {
+    try {
+      const modelIds = providerProbeModelIds(runtime.registry, request.body?.models);
+      const results = [];
+      for (const modelId of modelIds) {
+        const started = Date.now();
+        try {
+          const completion = await runChatCompletion({
+            activeRegistry: runtime.registry,
+            config,
+            body: {
+              model: modelId,
+              fallback: "none",
+              messages: [{ role: "user", content: "Reply with exactly ok." }],
+            },
+            messages: [{ role: "user", content: "Reply with exactly ok." }],
+            defaultChatModel: modelId,
+            markWorkerFailures: false,
+          });
+          results.push({
+            model: modelId,
+            ok: true,
+            elapsed_ms: Date.now() - started,
+            used_model: completion.used_model,
+            used_worker: completion.used_worker,
+            attempts: completion.attempts,
+          });
+        } catch (error) {
+          const providerError = toProviderError(error);
+          results.push({
+            model: modelId,
+            ok: false,
+            elapsed_ms: Date.now() - started,
+            code: providerError.code,
+            message: providerError.message,
+            attempts: providerError.details?.attempts || [],
+          });
+        }
+      }
+      return reply.send({
+        status: results.every((result) => result.ok) ? "ok" : "degraded",
+        results,
+      });
+    } catch (error) {
+      return sendProviderError(reply, error);
+    }
+  });
+
   app.post("/v1/chat/completions", async (request, reply) => {
     const body = request.body || {};
 
@@ -375,6 +423,23 @@ function getDefaultChatModel(runtime, config) {
   return runtime.settings?.defaultModel || config.chat?.defaultModel || runtime.registry.defaultModel("chat");
 }
 
+function providerProbeModelIds(registry, requestedModels) {
+  if (Array.isArray(requestedModels) && requestedModels.length) {
+    return [...new Set(requestedModels.map((modelId) => String(modelId || "").trim()).filter(Boolean))];
+  }
+
+  const providerModels = new Map();
+  for (const model of registry.models.values()) {
+    if (model.kind !== "chat" || !model.provider) {
+      continue;
+    }
+    if (!providerModels.has(model.provider)) {
+      providerModels.set(model.provider, model.id);
+    }
+  }
+  return [...providerModels.values()];
+}
+
 async function runConversationTurn({
   activeRegistry,
   config,
@@ -425,7 +490,15 @@ async function runConversationTurn({
   };
 }
 
-async function runChatCompletion({ activeRegistry, config, body, messages, onStatus, defaultChatModel }) {
+async function runChatCompletion({
+  activeRegistry,
+  config,
+  body,
+  messages,
+  onStatus,
+  defaultChatModel,
+  markWorkerFailures = true,
+}) {
   const requestedModel = body.model || defaultChatModel || config.chat?.defaultModel || activeRegistry.defaultModel("chat");
   const attempts = [];
   const statusEvents = [];
@@ -455,6 +528,7 @@ async function runChatCompletion({ activeRegistry, config, body, messages, onSta
     attempts,
     fallbackPolicy: body.fallback ?? "default",
     onStatus: emitStatus,
+    workerFailureCooldownMs: markWorkerFailures ? config.chat?.workerFailureCooldownMs : 0,
   });
 
   return createChatCompletionResponse({
@@ -465,7 +539,11 @@ async function runChatCompletion({ activeRegistry, config, body, messages, onSta
   });
 }
 
-async function tryModelWithFallbacks(registry, model, { method, input, attempts, fallbackPolicy, onStatus }) {
+async function tryModelWithFallbacks(
+  registry,
+  model,
+  { method, input, attempts, fallbackPolicy, onStatus, workerFailureCooldownMs = 30000 },
+) {
   const candidateIds = candidateModelIds(model, fallbackPolicy);
   let lastError = null;
 
@@ -475,6 +553,24 @@ async function tryModelWithFallbacks(registry, model, { method, input, attempts,
     onStatus?.("model_attempt", `Trying ${candidate.id}.`, { model: candidate.id });
 
     for (const worker of workers) {
+      const unavailable = workerUnavailable(worker);
+      if (unavailable) {
+        attempts.push({
+          model: candidate.id,
+          worker: worker.id,
+          status: "skipped",
+          code: unavailable.code,
+          message: `Skipped because ${worker.id} is marked unavailable until ${unavailable.retryAt}.`,
+        });
+        onStatus?.("worker_skipped", `${worker.id} skipped: ${unavailable.code}.`, {
+          model: candidate.id,
+          worker: worker.id,
+          code: unavailable.code,
+          retry_at: unavailable.retryAt,
+        });
+        continue;
+      }
+
       try {
         attempts.push({ model: candidate.id, worker: worker.id, status: "started" });
         onStatus?.("worker_started", `Running ${candidate.id} on ${worker.id}.`, {
@@ -511,6 +607,7 @@ async function tryModelWithFallbacks(registry, model, { method, input, attempts,
           worker: worker.id,
           code: providerError.code,
         });
+        markWorkerUnavailable(worker, providerError, workerFailureCooldownMs);
         lastError = providerError;
       }
     }
@@ -521,6 +618,29 @@ async function tryModelWithFallbacks(registry, model, { method, input, attempts,
     throw lastError;
   }
   throw new ProviderError("provider_error", "No provider succeeded.", { attempts });
+}
+
+function workerUnavailable(worker) {
+  if (!worker.unavailableUntil || worker.unavailableUntil <= Date.now()) {
+    return null;
+  }
+  return {
+    code: worker.lastFailureCode || "provider_unavailable",
+    retryAt: new Date(worker.unavailableUntil).toISOString(),
+  };
+}
+
+function markWorkerUnavailable(worker, error, cooldownMs) {
+  if (!cooldownMs || !stickyWorkerFailure(error.code)) {
+    return;
+  }
+  worker.lastFailureCode = error.code;
+  worker.lastFailureAt = new Date().toISOString();
+  worker.unavailableUntil = Date.now() + cooldownMs;
+}
+
+function stickyWorkerFailure(code) {
+  return ["auth_required", "rate_limited", "worker_spawn_failed", "worker_timeout"].includes(code);
 }
 
 function candidateModelIds(model, fallbackPolicy) {

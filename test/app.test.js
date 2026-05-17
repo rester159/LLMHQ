@@ -325,6 +325,56 @@ test("chat completions use visible default fallback", async () => {
   assert.equal(body.attempts[1].status, "succeeded");
 });
 
+test("chat completions skip a worker that already failed with sticky auth state", async () => {
+  const assetDir = path.join(os.tmpdir(), `llmhq-test-${Date.now()}-sticky-fallback`);
+  const badClaudeWorker = new FakeChatWorker({ id: "fake-claude", failWith: "auth_required" });
+  const registry = createModelRegistry({
+    fakeChatModels: [
+      {
+        id: "claude-haiku",
+        workers: [badClaudeWorker],
+        fallback: ["claude-sonnet", "codex-gpt-5.5"],
+      },
+      {
+        id: "claude-sonnet",
+        workers: [badClaudeWorker],
+        fallback: ["codex-gpt-5.5"],
+      },
+      {
+        id: "codex-gpt-5.5",
+        workers: [new FakeChatWorker({ id: "fake-codex", response: "codex fallback" })],
+        fallback: [],
+      },
+    ],
+  });
+  const app = await buildApp({
+    fastify: Fastify(),
+    config: { ...testConfig(assetDir), authMode: "none", chat: { defaultModel: "claude-haiku", workerFailureCooldownMs: 60000 } },
+    registry,
+    assetStore: new AssetStore(assetDir),
+  });
+
+  const response = await app.inject({
+    method: "POST",
+    url: "/v1/chat/completions",
+    payload: {
+      model: "claude-haiku",
+      fallback: "default",
+      messages: [{ role: "user", content: "use fallback" }],
+    },
+  });
+
+  assert.equal(response.statusCode, 200);
+  const body = response.json();
+  assert.equal(body.used_model, "codex-gpt-5.5");
+  assert.deepEqual(
+    body.attempts.map((attempt) => attempt.status),
+    ["failed", "skipped", "succeeded"],
+  );
+  assert.equal(body.attempts[1].model, "claude-sonnet");
+  assert.equal(body.attempts[1].code, "auth_required");
+});
+
 test("chat completions can disable fallback", async () => {
   const assetDir = path.join(os.tmpdir(), `llmhq-test-${Date.now()}-no-fallback`);
   const registry = createModelRegistry({
@@ -722,6 +772,45 @@ test("admin settings persist and rebuild model fallback chains", async () => {
   assert.deepEqual(persisted.models["claude-haiku"].fallback, ["codex-gpt-5.5"]);
 });
 
+test("admin provider probe reports provider usability without changing app payload contract", async () => {
+  const assetDir = path.join(os.tmpdir(), `llmhq-test-${Date.now()}-provider-probe`);
+  const registry = createModelRegistry({
+    fakeChatModels: [
+      {
+        id: "claude-haiku",
+        provider: "claude",
+        workers: [new FakeChatWorker({ id: "fake-claude", response: "ok" })],
+        fallback: [],
+      },
+      {
+        id: "codex-gpt-5.5",
+        provider: "codex",
+        workers: [new FakeChatWorker({ id: "fake-codex", failWith: "auth_required" })],
+        fallback: [],
+      },
+    ],
+  });
+  const app = await buildApp({
+    fastify: Fastify(),
+    config: { ...testConfig(assetDir), authMode: "none" },
+    registry,
+    assetStore: new AssetStore(assetDir),
+  });
+
+  const response = await app.inject({
+    method: "POST",
+    url: "/admin/provider-probe",
+    payload: { models: ["claude-haiku", "codex-gpt-5.5"] },
+  });
+
+  assert.equal(response.statusCode, 200);
+  const body = response.json();
+  assert.equal(body.status, "degraded");
+  assert.equal(body.results[0].ok, true);
+  assert.equal(body.results[1].ok, false);
+  assert.equal(body.results[1].code, "auth_required");
+});
+
 test("admin webui renders and summarizes gateway state", async () => {
   const settingsPayload = {
     version: 1,
@@ -809,6 +898,19 @@ test("admin webui renders and summarizes gateway state", async () => {
         models: [],
       });
     }
+    if (String(url).endsWith("/admin/provider-probe") && options.method === "POST") {
+      return jsonResponse({
+        status: "degraded",
+        results: [
+          {
+            model: "claude-haiku",
+            ok: false,
+            code: "auth_required",
+            attempts: [{ model: "claude-haiku", worker: "claude-1", status: "failed", code: "auth_required" }],
+          },
+        ],
+      });
+    }
     return { ok: false, status: 404, json: async () => ({}) };
   };
 
@@ -847,6 +949,15 @@ test("admin webui renders and summarizes gateway state", async () => {
   });
   assert.equal(saved.statusCode, 200);
   assert.deepEqual(savedSettings, ["claude-sonnet"]);
+
+  const probe = await app.inject({
+    method: "POST",
+    url: "/admin/api/provider-probe",
+    payload: {},
+  });
+  assert.equal(probe.statusCode, 200);
+  assert.equal(probe.json().status, "degraded");
+  assert.equal(probe.json().results[0].code, "auth_required");
 });
 
 function jsonResponse(payload) {

@@ -111,6 +111,8 @@ Runtime model settings are stored in `LLMHQ_SETTINGS_FILE`, defaulting to `./dat
 
 Saving settings validates the JSON, writes it to disk, rebuilds the in-memory registry, and applies the new routing behavior to subsequent calls without restarting LLMHQ.
 
+Provider usability is separate from provider configuration. The admin provider probe sends a minimal chat request per provider so LLMHQ can show whether the CLI profile can actually answer. If a worker fails with sticky provider state such as `auth_required`, LLMHQ marks that worker unavailable for a short cooldown and skips other aliases using the same worker while trying fallback providers.
+
 ## API Surface
 
 | Endpoint | Purpose |
@@ -120,6 +122,7 @@ Saving settings validates the JSON, writes it to disk, rebuilds the in-memory re
 | `GET /admin/settings` | Live runtime settings and rebuilt model list. |
 | `PUT /admin/settings` | Validate, persist, and apply runtime settings. |
 | `POST /admin/settings/reload` | Reload settings from disk and rebuild the registry. |
+| `POST /admin/provider-probe` | Verify provider sessions with minimal real requests. |
 | `GET /v1/models` | Model aliases, capabilities, outputs, and fallback chains. |
 | `POST /v1/chat/completions` | Stateless OpenAI-style chat call. |
 | `POST /v1/conversations` | Create or resolve a project conversation. |
