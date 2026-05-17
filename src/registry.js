@@ -13,7 +13,7 @@ export function createModelRegistry({
 }) {
   const models = new Map();
 
-  if (chatgptWorker) {
+  if (!settings && chatgptWorker) {
     models.set("chatgpt-image-browser", {
       id: "chatgpt-image-browser",
       capabilities: ["image_generate", "image_edit_experimental"],
@@ -24,7 +24,7 @@ export function createModelRegistry({
     });
   }
 
-  if (enableFake && fakeWorker) {
+  if (!settings && enableFake && fakeWorker) {
     models.set("fake-image", {
       id: "fake-image",
       capabilities: ["image_generate"],
@@ -51,7 +51,7 @@ export function createModelRegistry({
   }
 
   if (settings) {
-    addSettingsChatModels(models, settings, { claude, codex });
+    addSettingsModels(models, settings, { claude, codex, chatgptWorker });
   } else if (claude?.enabled) {
     const workers = buildClaudeWorkers(claude);
     addChatModel(models, "claude-haiku", workers, claude.models.haiku, ["claude-sonnet", "codex-gpt-5.5"], [
@@ -140,10 +140,18 @@ export function createModelRegistry({
   };
 }
 
-function addSettingsChatModels(models, settings, providerConfig) {
+function addSettingsModels(models, settings, providerConfig) {
   const workerCache = new Map();
   for (const [id, model] of Object.entries(settings.models || {})) {
     if (model.enabled === false) {
+      continue;
+    }
+    if (model.kind === "image") {
+      const worker = getImageWorker(model.provider, providerConfig);
+      if (!worker) {
+        continue;
+      }
+      addImageModel(models, id, worker, model.fallback || [], model.capabilities || ["image_generate"], model.provider);
       continue;
     }
     const workers = getProviderWorkers(workerCache, model.provider, settings, providerConfig);
@@ -192,6 +200,25 @@ function addChatModel(models, id, workers, cliModel, fallback, capabilities, pro
     cliModel,
     nextWorkerIndex: 0,
   });
+}
+
+function addImageModel(models, id, worker, fallback, capabilities, provider = null) {
+  models.set(id, {
+    id,
+    kind: "image",
+    provider,
+    capabilities,
+    output: ["image"],
+    worker,
+    fallback,
+  });
+}
+
+function getImageWorker(provider, providerConfig) {
+  if (provider === "chatgpt-browser") {
+    return providerConfig.chatgptWorker || null;
+  }
+  throw new ProviderError("invalid_request", `Unsupported image provider: ${provider}`);
 }
 
 function buildClaudeWorkers(config) {

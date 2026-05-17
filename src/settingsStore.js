@@ -4,36 +4,61 @@ import { ProviderError } from "./errors.js";
 
 const MODEL_DEFAULTS = {
   "claude-haiku": {
+    kind: "chat",
     provider: "claude",
     cliModelKey: "haiku",
     cliModel: "haiku",
     capabilities: ["chat", "vision", "fast"],
+    output: ["text"],
     fallback: ["claude-sonnet", "codex-gpt-5.5"],
   },
   "claude-sonnet": {
+    kind: "chat",
     provider: "claude",
     cliModelKey: "sonnet",
     cliModel: "sonnet",
     capabilities: ["chat", "vision", "smart"],
+    output: ["text"],
     fallback: ["codex-gpt-5.5"],
   },
   "claude-opus": {
+    kind: "chat",
     provider: "claude",
     cliModelKey: "opus",
     cliModel: "opus",
     capabilities: ["chat", "vision", "deep_reasoning"],
+    output: ["text"],
     fallback: ["claude-sonnet", "codex-gpt-5.5"],
   },
   "codex-gpt-5.5": {
+    kind: "chat",
     provider: "codex",
     cliModelKey: "model",
     cliModel: "gpt-5.5",
-    capabilities: ["chat", "code", "vision"],
+    capabilities: ["chat", "code"],
     fallback: ["claude-sonnet"],
+    output: ["text"],
+  },
+  "codex-gpt-5.5-vision": {
+    kind: "chat",
+    provider: "codex",
+    cliModelKey: "model",
+    cliModel: "gpt-5.5",
+    capabilities: ["chat", "vision", "image_input"],
+    fallback: [],
+    output: ["text"],
+  },
+  "chatgpt-image-browser": {
+    kind: "image",
+    provider: "chatgpt-browser",
+    capabilities: ["image_generate", "image_edit_experimental"],
+    fallback: [],
+    output: ["image"],
   },
 };
 
-const PROVIDERS = new Set(["claude", "codex"]);
+const PROVIDERS = new Set(["claude", "codex", "chatgpt-browser"]);
+const MODEL_KINDS = new Set(["chat", "image"]);
 
 export class SettingsStore {
   constructor({ filePath, defaultSettings }) {
@@ -44,7 +69,13 @@ export class SettingsStore {
   async load() {
     try {
       const parsed = JSON.parse(await fs.readFile(this.filePath, "utf8"));
-      return normalizeSettings(parsed, { baseDir: path.dirname(this.filePath) });
+      const normalized = normalizeSettings(parsed, { baseDir: path.dirname(this.filePath) });
+      const defaults = normalizeSettings(resolveDefault(this.defaultSettings), { baseDir: path.dirname(this.filePath) });
+      const merged = mergeMissingDefaults(normalized, defaults);
+      if (merged.changed) {
+        await this.write(merged.settings);
+      }
+      return merged.settings;
     } catch (error) {
       if (error.code !== "ENOENT") {
         throw new ProviderError("invalid_request", `Could not load LLMHQ settings: ${error.message}`);
@@ -72,21 +103,31 @@ export class SettingsStore {
 export function defaultRuntimeSettings(config) {
   const claudeEnabled = Boolean(config.claude?.enabled);
   const codexEnabled = Boolean(config.codex?.enabled);
+  const chatgptBrowserEnabled = Boolean(config.chatgpt?.enabled);
   const models = {};
 
   for (const [id, defaults] of Object.entries(MODEL_DEFAULTS)) {
-    const providerEnabled = defaults.provider === "claude" ? claudeEnabled : codexEnabled;
-    const providerConfig = defaults.provider === "claude" ? config.claude : config.codex;
+    const providerEnabled =
+      defaults.provider === "claude"
+        ? claudeEnabled
+        : defaults.provider === "codex"
+          ? codexEnabled
+          : chatgptBrowserEnabled;
+    const providerConfig = defaults.provider === "claude" ? config.claude : defaults.provider === "codex" ? config.codex : {};
     const configuredCliModel =
       defaults.provider === "claude"
         ? providerConfig?.models?.[defaults.cliModelKey]
-        : providerConfig?.[defaults.cliModelKey];
+        : defaults.provider === "codex"
+          ? providerConfig?.[defaults.cliModelKey]
+          : null;
 
     models[id] = {
       enabled: providerEnabled,
+      kind: defaults.kind,
       provider: defaults.provider,
-      cliModel: configuredCliModel || defaults.cliModel,
+      ...(defaults.kind === "chat" ? { cliModel: configuredCliModel || defaults.cliModel } : {}),
       capabilities: defaults.capabilities,
+      output: defaults.output,
       fallback: defaults.fallback,
     };
   }
@@ -173,20 +214,37 @@ function normalizeModels(models) {
       throw new ProviderError("invalid_request", `${id} must be a model object.`);
     }
 
+    const kind = String(rawModel.kind || "chat").trim();
+    if (!MODEL_KINDS.has(kind)) {
+      throw new ProviderError("invalid_request", `${id} has unsupported kind: ${kind || "missing"}.`);
+    }
     const provider = String(rawModel.provider || "").trim();
     if (!PROVIDERS.has(provider)) {
       throw new ProviderError("invalid_request", `${id} has unsupported provider: ${provider || "missing"}.`);
     }
-    const cliModel = String(rawModel.cliModel || "").trim();
-    if (!cliModel) {
+    if (provider === "chatgpt-browser" && kind !== "image") {
+      throw new ProviderError("invalid_request", `${id} uses chatgpt-browser but is not an image model.`);
+    }
+    if ((provider === "claude" || provider === "codex") && kind !== "chat") {
+      throw new ProviderError("invalid_request", `${id} uses ${provider} but is not a chat model.`);
+    }
+
+    const cliModel = rawModel.cliModel == null ? null : String(rawModel.cliModel || "").trim();
+    if (kind === "chat" && !cliModel) {
       throw new ProviderError("invalid_request", `${id} is missing cliModel.`);
     }
 
     normalized[id] = {
       enabled: rawModel.enabled !== false,
+      kind,
       provider,
-      cliModel,
-      capabilities: normalizeStringArray(rawModel.capabilities, ["chat"], `${id}.capabilities`),
+      ...(kind === "chat" ? { cliModel } : {}),
+      capabilities: normalizeStringArray(
+        rawModel.capabilities,
+        kind === "image" ? ["image_generate"] : ["chat"],
+        `${id}.capabilities`,
+      ),
+      output: normalizeStringArray(rawModel.output, kind === "image" ? ["image"] : ["text"], `${id}.output`),
       fallback: normalizeStringArray(rawModel.fallback, [], `${id}.fallback`),
     };
   }
@@ -207,11 +265,11 @@ function normalizeModels(models) {
 
 function normalizeDefaultModel(value, models) {
   const defaultModel = String(value || "").trim();
-  if (defaultModel && models[defaultModel]?.enabled) {
+  if (defaultModel && models[defaultModel]?.enabled && models[defaultModel]?.kind === "chat") {
     return defaultModel;
   }
 
-  const firstEnabled = Object.entries(models).find(([, model]) => model.enabled);
+  const firstEnabled = Object.entries(models).find(([, model]) => model.enabled && model.kind === "chat");
   if (firstEnabled) {
     return firstEnabled[0];
   }
@@ -239,4 +297,44 @@ function normalizePath(value, baseDir) {
 
 function resolveDefault(value) {
   return typeof value === "function" ? value() : value;
+}
+
+function mergeMissingDefaults(settings, defaults) {
+  let changed = false;
+  const models = { ...settings.models };
+  for (const [id, model] of Object.entries(defaults.models || {})) {
+    if (!models[id]) {
+      models[id] = model;
+      changed = true;
+      continue;
+    }
+    if (
+      id === "codex-gpt-5.5" &&
+      arraysEqual(models[id].capabilities, ["chat", "code", "vision"]) &&
+      arraysEqual(model.capabilities, ["chat", "code"])
+    ) {
+      models[id] = {
+        ...models[id],
+        capabilities: model.capabilities,
+      };
+      changed = true;
+    }
+  }
+
+  return {
+    changed,
+    settings: {
+      ...settings,
+      models,
+    },
+  };
+}
+
+function arraysEqual(left, right) {
+  return (
+    Array.isArray(left) &&
+    Array.isArray(right) &&
+    left.length === right.length &&
+    left.every((entry, index) => entry === right[index])
+  );
 }

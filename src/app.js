@@ -321,6 +321,9 @@ export async function buildApp({
     try {
       const activeRegistry = runtime.registry;
       const initialModel = activeRegistry.get(modelId);
+      if (initialModel.kind !== "image") {
+        throw new ProviderError("invalid_request", `${modelId} is not an image model.`);
+      }
       const result = await tryModelWithFallbacks(activeRegistry, initialModel, {
         method: "generateImage",
         input: { prompt },
@@ -409,6 +412,7 @@ function serializeModels(registry) {
   return [...registry.models.values()].map((model) => ({
     id: model.id,
     object: "model",
+    kind: model.kind,
     capabilities: model.capabilities,
     output: model.output,
     fallback: model.fallback,

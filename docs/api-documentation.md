@@ -82,8 +82,11 @@ Apps should use LLMHQ model aliases, not provider-native model names.
 | `claude-haiku` | Chat | chat, vision, fast | Claude CLI |
 | `claude-sonnet` | Chat | chat, vision, smart | Claude CLI |
 | `claude-opus` | Chat | chat, vision, deep reasoning | Claude CLI |
-| `codex-gpt-5.5` | Chat | chat, code, vision | Codex CLI |
+| `codex-gpt-5.5` | Chat | chat, code | Codex CLI |
+| `codex-gpt-5.5-vision` | Chat | chat, vision, image input | Codex CLI |
 | `chatgpt-image-browser` | Image | image generation, experimental image edit | ChatGPT browser |
+
+`codex-gpt-5.5` and `codex-gpt-5.5-vision` route to the same Codex CLI provider model by default, but they are separate LLMHQ aliases so applications can request text/code turns and image-input vision turns explicitly. `chatgpt-image-browser` is an image-output model and is called through `/v1/images/generations`, not `/v1/chat/completions`.
 
 Fetch the live list from:
 
@@ -103,6 +106,7 @@ Default fallback chains:
 | `claude-sonnet` | `codex-gpt-5.5` |
 | `claude-opus` | `claude-sonnet`, then `codex-gpt-5.5` |
 | `codex-gpt-5.5` | `claude-sonnet` |
+| `codex-gpt-5.5-vision` | none |
 | `chatgpt-image-browser` | none |
 
 Default behavior:
@@ -274,17 +278,29 @@ Example response:
     "models": {
       "claude-haiku": {
         "enabled": true,
+        "kind": "chat",
         "provider": "claude",
         "cliModel": "haiku",
         "capabilities": ["chat", "vision", "fast"],
+        "output": ["text"],
         "fallback": ["claude-sonnet", "codex-gpt-5.5"]
       },
-      "claude-sonnet": {
+      "codex-gpt-5.5-vision": {
         "enabled": true,
-        "provider": "claude",
-        "cliModel": "sonnet",
-        "capabilities": ["chat", "vision", "smart"],
-        "fallback": ["codex-gpt-5.5"]
+        "kind": "chat",
+        "provider": "codex",
+        "cliModel": "gpt-5.5",
+        "capabilities": ["chat", "vision", "image_input"],
+        "output": ["text"],
+        "fallback": []
+      },
+      "chatgpt-image-browser": {
+        "enabled": true,
+        "kind": "image",
+        "provider": "chatgpt-browser",
+        "capabilities": ["image_generate", "image_edit_experimental"],
+        "output": ["image"],
+        "fallback": []
       }
     }
   }
@@ -310,9 +326,11 @@ Editable fields:
 - `workers.claude`: Claude worker accounts and profile directories.
 - `workers.codex`: Codex worker accounts and profile directories.
 - `models.<alias>.enabled`: whether the model alias is served.
-- `models.<alias>.provider`: `claude` or `codex`.
-- `models.<alias>.cliModel`: provider-native model argument passed to the CLI.
+- `models.<alias>.kind`: `chat` or `image`.
+- `models.<alias>.provider`: `claude`, `codex`, or `chatgpt-browser`.
+- `models.<alias>.cliModel`: provider-native model argument passed to the CLI for chat models.
 - `models.<alias>.capabilities`: metadata returned by `/v1/models`.
+- `models.<alias>.output`: output modality metadata returned by `/v1/models`.
 - `models.<alias>.fallback`: ordered fallback alias list used by `"fallback": "default"`.
 
 Notes:
@@ -403,6 +421,7 @@ Example response:
     {
       "id": "claude-sonnet",
       "object": "model",
+      "kind": "chat",
       "capabilities": ["chat", "vision", "smart"],
       "output": ["text"],
       "fallback": ["codex-gpt-5.5"]
@@ -842,7 +861,7 @@ In Docker, this maps to:
 
 Generates an image and stores it as a local asset.
 
-The currently implemented image model is:
+The currently implemented image-output model is:
 
 ```text
 chatgpt-image-browser
