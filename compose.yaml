@@ -5,6 +5,8 @@ services:
     restart: unless-stopped
     ports:
       - "${LLMHQ_HOST_BIND:-127.0.0.1}:${LLMHQ_HOST_PORT:-18088}:8080"
+    labels:
+      net.unraid.docker.webui: "http://[IP]:[PORT:18089]/admin"
     expose:
       - "8080"
       - "7900"
@@ -29,6 +31,24 @@ services:
       LLMHQ_CHATGPT_TIMEOUT_MS: "60000"
     volumes:
       - ${LLMHQ_DATA_DIR:-./data}:/app/data
+    networks:
+      - llmhq_private
+
+  webui:
+    build: .
+    container_name: llmhq-webui
+    restart: unless-stopped
+    depends_on:
+      - llmhq
+    command: ["node", "src/adminServer.js"]
+    ports:
+      - "${LLMHQ_WEBUI_BIND:-0.0.0.0}:${LLMHQ_WEBUI_PORT:-18089}:8090"
+    labels:
+      net.unraid.docker.webui: "http://[IP]:[PORT:18089]/admin"
+    environment:
+      LLMHQ_ADMIN_HOST: "0.0.0.0"
+      LLMHQ_ADMIN_PORT: "8090"
+      LLMHQ_ADMIN_API_BASE_URL: "http://llmhq:8080"
     networks:
       - llmhq_private
 
