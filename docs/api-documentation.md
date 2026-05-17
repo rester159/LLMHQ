@@ -519,6 +519,7 @@ Request body:
 | `message` | object | Required unless `messages` is used | One new message. |
 | `messages` | array | Required unless `message` is used | New messages to append as this turn input. |
 | `metadata` | object | No | Used only when creating a conversation. |
+| `context` | object | No | Generic app-provided context to store separately from chat turns. Supports `summary`, `metadata`, and `messages`. |
 
 Example request:
 
@@ -530,6 +531,16 @@ $body = @{
   default_model = "claude-sonnet"
   model = "claude-sonnet"
   fallback = "default"
+  context = @{
+    summary = "Stable workflow context supplied by the calling app."
+    metadata = @{
+      app = "soundpulse"
+      workflow = "strategy-generator"
+    }
+    messages = @(
+      @{ role = "system"; content = "Use this application context before chat history." }
+    )
+  }
   message = @{
     role = "user"
     content = "Create a release strategy for this track."
@@ -559,6 +570,8 @@ Example response:
     "metadata": {
       "feature": "strategy"
     },
+    "context_message_count": 2,
+    "context_updated_at": "2026-05-16T08:02:00.000Z",
     "message_count": 2,
     "created_at": "2026-05-16T08:00:00.000Z",
     "updated_at": "2026-05-16T08:02:00.000Z"
@@ -593,7 +606,9 @@ Example response:
     "usage": null,
     "conversation_id": "conv_68760674-64f3-4dc1-8733-f99df8ebc2d1",
     "project_id": "soundpulse",
-    "conversation_key": "strategy-generator"
+    "conversation_key": "strategy-generator",
+    "context_message_count": 2,
+    "context_updated_at": "2026-05-16T08:02:00.000Z"
   }
 }
 ```
@@ -634,12 +649,13 @@ This endpoint returns the same response shape as `POST /v1/conversations/message
 For each stateful turn, LLMHQ:
 
 1. Resolves the conversation by `conversation_id` or `project_id + conversation_key`.
-2. Reads prior stored messages from disk.
-3. Combines prior messages with the new input.
-4. Keeps up to `LLMHQ_MAX_CONVERSATION_MESSAGES` messages, preserving the first system message when present.
-5. Calls `/v1/chat/completions` internally.
-6. Stores the new user/input messages and assistant message.
-7. Saves fallback and provider attempt metadata on the assistant message.
+2. Updates stored app context when a `context` object is provided.
+3. Reads prior stored messages from disk.
+4. Prepends app context messages, then combines prior chat messages with the new input.
+5. Keeps up to `LLMHQ_MAX_CONVERSATION_MESSAGES` chat messages, preserving app context messages outside that chat-history limit.
+6. Calls `/v1/chat/completions` internally.
+7. Stores the new user/input messages and assistant message.
+8. Saves fallback and provider attempt metadata on the assistant message.
 
 Conversation files live in:
 
@@ -899,4 +915,3 @@ or inside Docker:
 ```powershell
 docker compose exec llmhq npm run doctor
 ```
-

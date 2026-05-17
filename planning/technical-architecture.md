@@ -118,8 +118,9 @@ The preferred stateful integration uses:
 - `conversation_key`: stable workflow identifier, for example `strategy-generator`.
 - `default_model`: optional default model for that conversation.
 - `message`: one new user message or a small batch of new messages.
+- `context`: optional generic app context with `summary`, `metadata`, and `messages`.
 
-LLMHQ stores history centrally and replays the last `LLMHQ_MAX_CONVERSATION_MESSAGES` messages when generating the next turn. This lets apps that do not have their own chat store still get durable context. It also lets a conversation begin on one model and continue on another model.
+LLMHQ stores history centrally and replays app context plus the last `LLMHQ_MAX_CONVERSATION_MESSAGES` chat messages when generating the next turn. App context is deliberately generic: LLMHQ does not know whether the caller is a coding app, catalog app, music app, or another workflow. It simply stores and prepends the application-provided context block.
 
 ## Auth And Network Boundary
 
@@ -149,4 +150,3 @@ These profiles hold CLI/browser login state. LLMHQ does not store Google passwor
 - The ChatGPT image worker is experimental because it automates the ChatGPT web UI. UI changes, captcha, rate limits, or logout can break it.
 - The API reports the actual `used_model`, `used_worker`, `fallback_used`, `fallback_reason`, and `attempts` so product apps can surface provider failures instead of hiding them.
 - Same-server latency is mostly local HTTP overhead plus provider execution time. It avoids reinstalling provider CLIs in every product app.
-

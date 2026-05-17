@@ -52,7 +52,7 @@ LLMHQ_AUTH_MODE=none
 
 Then product apps on the same host can call LLMHQ without an `Authorization` header. For Docker-to-Docker traffic, run LLMHQ and the product containers on the same private Docker network and keep the gateway off public/LAN ports.
 
-`npm run login:chatgpt:vnc` opens a persistent Playwright browser profile at `LLMHQ_CHATGPT_PROFILE_DIR` and exposes it through noVNC at `http://127.0.0.1:7900/vnc.html?autoconnect=1&resize=scale`. Log in manually with Google, then press Enter in the terminal. LLMHQ will reuse that browser profile for image generation.
+`npm run login:chatgpt:vnc` opens a persistent Playwright browser profile at `LLMHQ_CHATGPT_PROFILE_DIR` and exposes it through noVNC. If you publish the noVNC port for local setup, open `http://127.0.0.1:7900/vnc.html?autoconnect=1&resize=scale`. Log in manually with Google, then press Enter in the terminal. LLMHQ will reuse that browser profile for image generation.
 
 `npm run login:claude -- claude-1` and `npm run login:codex -- codex-1` log each subscription CLI into its own persistent profile.
 
@@ -119,6 +119,7 @@ Apps can choose either mode:
 
 - Stateless: app sends the full `messages` array to `/v1/chat/completions`.
 - Stateful: app sends `project_id + conversation_key` to `/v1/conversations/messages`, and LLMHQ stores/replays the chat history.
+- Stateful with app context: app also sends a generic `context` object with stable application context. LLMHQ stores that context separately from chat turns and prepends it to future model calls for the same conversation.
 
 For apps that do not want to store chat context, use a stable key per workflow:
 
@@ -135,6 +136,16 @@ $body = @{
   conversation_key = "strategy-generator"
   title = "Strategy Generator"
   default_model = "claude-sonnet"
+  context = @{
+    summary = "Workflow-level context that should stay stable across turns."
+    metadata = @{
+      app = "soundpulse"
+      workflow = "strategy-generator"
+    }
+    messages = @(
+      @{ role = "system"; content = "Use the application-provided strategy context before chat history." }
+    )
+  }
   fallback = "default"
   message = @{
     role = "user"
@@ -157,6 +168,7 @@ LLMHQ will create the conversation on the first call, reuse it on later calls wi
     "id": "conv_...",
     "project_id": "soundpulse",
     "conversation_key": "strategy-generator",
+    "context_message_count": 2,
     "message_count": 2
   },
   "chat_completion": {
@@ -169,7 +181,8 @@ LLMHQ will create the conversation on the first call, reuse it on later calls wi
       }
     ],
     "used_model": "claude-sonnet",
-    "fallback_used": false
+    "fallback_used": false,
+    "context_message_count": 2
   }
 }
 ```
@@ -204,8 +217,8 @@ Invoke-RestMethod `
 
 ## Operational Notes
 
-- The default Compose setup binds the gateway to `127.0.0.1:8080` and also exposes it to containers on the private `llmhq_private` network as `http://llmhq:8080`.
-- The default Compose setup exposes noVNC login only on `127.0.0.1:7900`.
+- The default Compose setup exposes the gateway only to containers on the private `llmhq_private` network as `http://llmhq:8080`.
+- For one-off local host access, temporarily publish `127.0.0.1:8080:8080` or `127.0.0.1:7900:7900` in Compose.
 - Claude and Codex workers use persistent profile directories under `./data/profiles/...`.
 - Stored conversations live under `./data/conversations`.
 - Run `npm run doctor` or `docker compose exec llmhq npm run doctor` to verify CLI availability.
@@ -227,4 +240,10 @@ Other product containers should join the `llmhq_private` Docker network and use:
 
 ```env
 LLMHQ_BASE_URL=http://llmhq:8080
+```
+
+For Unraid-style layouts where source and data live in sibling folders, set:
+
+```env
+LLMHQ_DATA_DIR=/mnt/user/appdata/llmhq/data
 ```
