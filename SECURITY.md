@@ -6,11 +6,13 @@ LLMHQ is designed for private same-server use.
 
 Recommended deployment:
 
-- Bind the host API to `127.0.0.1:8080`.
-- Connect product containers through the private `llmhq_private` Docker network.
+- Bind the host API to a loopback-only port such as `127.0.0.1:18088`.
+- Let the `llmhq-network-sync` sidecar connect the `llmhq` container to same-server app networks with the `llmhq` alias.
 - Keep noVNC login exposed only on `127.0.0.1:7900`.
 
 Do not expose LLMHQ directly to the internet.
+
+The default Compose setup mounts `/var/run/docker.sock` into `llmhq-network-sync` so it can attach LLMHQ to local Docker networks automatically. Docker socket access is host-admin equivalent; run this only on a trusted local server. Disable the sidecar or keep explicit networks if the deployment boundary is not trusted.
 
 ## Secrets And Sessions
 
@@ -34,4 +36,3 @@ Use `LLMHQ_AUTH_MODE=token` and `LLMHQ_API_KEYS` if the service is reachable out
 ## Reporting Issues
 
 For private deployments, rotate wrapper keys and provider sessions if credentials may have been exposed.
-

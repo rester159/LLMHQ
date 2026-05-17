@@ -3,6 +3,8 @@ services:
     build: .
     container_name: llmhq
     restart: unless-stopped
+    ports:
+      - "${LLMHQ_HOST_BIND:-127.0.0.1}:${LLMHQ_HOST_PORT:-18088}:8080"
     expose:
       - "8080"
       - "7900"
@@ -29,6 +31,22 @@ services:
       - ${LLMHQ_DATA_DIR:-./data}:/app/data
     networks:
       - llmhq_private
+
+  network-sync:
+    image: docker:27-cli
+    container_name: llmhq-network-sync
+    restart: unless-stopped
+    depends_on:
+      - llmhq
+    network_mode: "none"
+    environment:
+      LLMHQ_CONTAINER: "llmhq"
+      LLMHQ_NETWORK_SYNC_EXCLUDE: "${LLMHQ_NETWORK_SYNC_EXCLUDE:-bridge host none llmhq_private}"
+      LLMHQ_NETWORK_SYNC_INTERVAL_SECONDS: "${LLMHQ_NETWORK_SYNC_INTERVAL_SECONDS:-30}"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./scripts/server-network-sync.sh:/usr/local/bin/llmhq-network-sync:ro
+    command: ["sh", "/usr/local/bin/llmhq-network-sync"]
 
 networks:
   llmhq_private:
