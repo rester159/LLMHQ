@@ -31,6 +31,7 @@ services:
       LLMHQ_CHATGPT_PROFILE_DIR: "/app/data/browser-profiles/chatgpt-main"
       LLMHQ_CHATGPT_HEADLESS: "1"
       LLMHQ_CHATGPT_TIMEOUT_MS: "60000"
+      LLMHQ_PROXY_TARGET: "${LLMHQ_PROXY_TARGET:-}"
     volumes:
       - ${LLMHQ_DATA_DIR:-./data}:/app/data
     networks:
