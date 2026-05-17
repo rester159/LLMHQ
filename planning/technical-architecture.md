@@ -87,7 +87,8 @@ flowchart TD
   Models --> Haiku["claude-haiku\nchat, vision, fast"]
   Models --> Sonnet["claude-sonnet\nchat, vision, smart"]
   Models --> Opus["claude-opus\nchat, vision, deep_reasoning"]
-  Models --> Codex["codex-gpt-5.5\nchat, code, vision"]
+  Models --> Codex["codex-gpt-5.5\nchat, code"]
+  Models --> CodexVision["codex-gpt-5.5-vision\nchat, vision, image_input"]
   Models --> Image["chatgpt-image-browser\nimage_generate, image_edit_experimental"]
 
   Haiku -->|"fallback"| Sonnet
@@ -98,7 +99,7 @@ flowchart TD
   Codex -->|"fallback"| Sonnet
 ```
 
-Apps select the model explicitly. If a selected model fails, LLMHQ reports the failure in `attempts` and then uses the configured default fallback unless the request disables fallback with `fallback: "none"` or `fallback: false`.
+Apps select the model explicitly. Codex text/code, Codex vision input, and ChatGPT image output are separate aliases in the runtime settings catalog even when two aliases share the same provider account. If a selected model fails, LLMHQ reports the failure in `attempts` and then uses the configured default fallback unless the request disables fallback with `fallback: "none"` or `fallback: false`.
 
 Runtime model settings are stored in `LLMHQ_SETTINGS_FILE`, defaulting to `./data/settings.json`. The admin WebUI can edit:
 
@@ -107,6 +108,7 @@ Runtime model settings are stored in `LLMHQ_SETTINGS_FILE`, defaulting to `./dat
 - model aliases
 - provider-native CLI model names
 - model capabilities metadata
+- model output modality metadata
 - default fallback chains
 
 Saving settings validates the JSON, writes it to disk, rebuilds the in-memory registry, and applies the new routing behavior to subsequent calls without restarting LLMHQ.

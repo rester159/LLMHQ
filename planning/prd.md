@@ -85,6 +85,7 @@ Apps must be able to select one of the supported model aliases:
 - `claude-sonnet`
 - `claude-opus`
 - `codex-gpt-5.5`
+- `codex-gpt-5.5-vision`
 - `chatgpt-image-browser` for image generation only
 
 If `model` is omitted for chat, the service uses `LLMHQ_DEFAULT_CHAT_MODEL`, currently `claude-sonnet`.

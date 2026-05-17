@@ -829,6 +829,12 @@ test("admin settings persist and rebuild model fallback chains", async () => {
   assert.equal(initial.statusCode, 200);
   const settings = initial.json().settings;
   assert.deepEqual(settings.models["claude-haiku"].fallback, ["claude-sonnet", "codex-gpt-5.5"]);
+  assert.equal(settings.models["codex-gpt-5.5"].kind, "chat");
+  assert.deepEqual(settings.models["codex-gpt-5.5"].capabilities, ["chat", "code"]);
+  assert.equal(settings.models["codex-gpt-5.5-vision"].kind, "chat");
+  assert.deepEqual(settings.models["codex-gpt-5.5-vision"].capabilities, ["chat", "vision", "image_input"]);
+  assert.equal(settings.models["chatgpt-image-browser"].kind, "image");
+  assert.equal(settings.models["chatgpt-image-browser"].enabled, false);
 
   const changed = {
     ...settings,
@@ -856,6 +862,100 @@ test("admin settings persist and rebuild model fallback chains", async () => {
 
   const persisted = JSON.parse(await fs.readFile(path.join(assetDir, "settings.json"), "utf8"));
   assert.deepEqual(persisted.models["claude-haiku"].fallback, ["codex-gpt-5.5"]);
+});
+
+test("existing settings files are migrated with missing discrete model aliases", async () => {
+  const assetDir = path.join(os.tmpdir(), `llmhq-test-${Date.now()}-settings-migration`);
+  await fs.mkdir(assetDir, { recursive: true });
+  await fs.writeFile(
+    path.join(assetDir, "settings.json"),
+    JSON.stringify(
+      {
+        version: 1,
+        defaultModel: "claude-sonnet",
+        workers: {
+          claude: [{ id: "claude-1", profileDir: path.join(assetDir, "profiles", "claude-1") }],
+          codex: [{ id: "codex-1", profileDir: path.join(assetDir, "profiles", "codex-1") }],
+        },
+        models: {
+          "claude-sonnet": {
+            enabled: true,
+            provider: "claude",
+            cliModel: "sonnet",
+            capabilities: ["chat", "vision", "smart"],
+            fallback: ["codex-gpt-5.5"],
+          },
+          "codex-gpt-5.5": {
+            enabled: true,
+            provider: "codex",
+            cliModel: "gpt-5.5",
+            capabilities: ["chat", "code", "vision"],
+            fallback: ["claude-sonnet"],
+          },
+        },
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+
+  const app = await buildApp({
+    fastify: Fastify(),
+    config: {
+      ...runtimeConfig(assetDir),
+      chatgpt: {
+        enabled: true,
+        profileDir: path.join(assetDir, "browser-profiles", "chatgpt-main"),
+        headless: true,
+        timeoutMs: 1000,
+        url: "https://chatgpt.com/",
+      },
+    },
+    assetStore: new AssetStore(assetDir),
+  });
+
+  const response = await app.inject({ method: "GET", url: "/admin/settings" });
+  assert.equal(response.statusCode, 200);
+  const settings = response.json().settings;
+  assert.equal(settings.models["codex-gpt-5.5"].kind, "chat");
+  assert.deepEqual(settings.models["codex-gpt-5.5"].capabilities, ["chat", "code"]);
+  assert.equal(settings.models["codex-gpt-5.5-vision"].kind, "chat");
+  assert.equal(settings.models["chatgpt-image-browser"].kind, "image");
+  assert.equal(settings.models["chatgpt-image-browser"].enabled, true);
+
+  const persisted = JSON.parse(await fs.readFile(path.join(assetDir, "settings.json"), "utf8"));
+  assert.deepEqual(persisted.models["codex-gpt-5.5"].capabilities, ["chat", "code"]);
+  assert.equal(persisted.models["codex-gpt-5.5-vision"].kind, "chat");
+  assert.equal(persisted.models["chatgpt-image-browser"].kind, "image");
+});
+
+test("models endpoint lists discrete text vision and image model aliases", async () => {
+  const assetDir = path.join(os.tmpdir(), `llmhq-test-${Date.now()}-all-models`);
+  const app = await buildApp({
+    fastify: Fastify(),
+    config: {
+      ...runtimeConfig(assetDir),
+      chatgpt: {
+        enabled: true,
+        profileDir: path.join(assetDir, "browser-profiles", "chatgpt-main"),
+        headless: true,
+        timeoutMs: 1000,
+        url: "https://chatgpt.com/",
+      },
+    },
+    assetStore: new AssetStore(assetDir),
+  });
+
+  const response = await app.inject({ method: "GET", url: "/v1/models" });
+  assert.equal(response.statusCode, 200);
+  const models = new Map(response.json().data.map((model) => [model.id, model]));
+  assert.equal(models.get("codex-gpt-5.5").kind, "chat");
+  assert.deepEqual(models.get("codex-gpt-5.5").capabilities, ["chat", "code"]);
+  assert.equal(models.get("codex-gpt-5.5-vision").kind, "chat");
+  assert.deepEqual(models.get("codex-gpt-5.5-vision").capabilities, ["chat", "vision", "image_input"]);
+  assert.equal(models.get("chatgpt-image-browser").kind, "image");
+  assert.deepEqual(models.get("chatgpt-image-browser").output, ["image"]);
 });
 
 test("admin provider probe reports provider usability without changing app payload contract", async () => {

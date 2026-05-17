@@ -129,8 +129,11 @@ Available v1 chat model aliases:
 - `claude-sonnet`
 - `claude-opus`
 - `codex-gpt-5.5`
+- `codex-gpt-5.5-vision`
 
 Fallback is explicit. If `claude-opus` fails and `claude-sonnet` succeeds, the response includes `requested_model`, `used_model`, `fallback_used`, `fallback_reason`, and `attempts`.
+
+Use `codex-gpt-5.5` for Codex text/code turns. Use `codex-gpt-5.5-vision` for Codex image-input turns that include `image_url` message parts pointing at local image paths. Use `chatgpt-image-browser` through `/v1/images/generations` for image output.
 
 For live "current action" UI, send `stream = $true` and `status_events = $true`. LLMHQ will emit named SSE `status` events with generic fields like `stage`, `message`, `model`, `worker`, and `created` before the final assistant chunk.
 

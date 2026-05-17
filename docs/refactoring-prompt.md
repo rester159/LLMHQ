@@ -34,6 +34,7 @@ Default model behavior:
   - claude-sonnet
   - claude-opus
   - codex-gpt-5.5
+  - codex-gpt-5.5-vision
 
 Fallback behavior:
 - Send fallback: "default" on normal calls.
@@ -129,7 +130,7 @@ type LlmMessage = {
 };
 
 type ChatOptions = {
-  model?: "claude-haiku" | "claude-sonnet" | "claude-opus" | "codex-gpt-5.5";
+  model?: "claude-haiku" | "claude-sonnet" | "claude-opus" | "codex-gpt-5.5" | "codex-gpt-5.5-vision";
   fallback?: "default" | "none" | false | string | string[];
   temperature?: number;
   maxTokens?: number;
