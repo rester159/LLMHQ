@@ -68,9 +68,12 @@ jobs:
           mv "${source_next}" "${base}/source"
 
           docker network create llmhq_private >/dev/null 2>&1 || true
-          LLMHQ_DATA_DIR="${base}/data" docker compose -p llmhq -f "${base}/source/compose.yaml" up -d --build llmhq
+          LLMHQ_DATA_DIR="${base}/data" docker compose -p llmhq -f "${base}/source/compose.yaml" up -d --build llmhq network-sync
+          host_port="${LLMHQ_HOST_PORT:-18088}"
           for attempt in $(seq 1 30); do
-            if docker exec llmhq node -e "fetch('http://127.0.0.1:8080/v1/models').then((r) => { if (!r.ok) process.exit(1); return r.text(); }).then((body) => console.log(body.slice(0, 500))).catch(() => process.exit(1))"; then
+            if docker exec llmhq node -e "fetch('http://127.0.0.1:8080/v1/models').then((r) => { if (!r.ok) process.exit(1); return r.text(); }).then((body) => console.log(body.slice(0, 500))).catch(() => process.exit(1))" \
+              && node -e "fetch('http://127.0.0.1:${host_port}/v1/models').then((r) => { if (!r.ok) process.exit(1); return r.text(); }).then((body) => console.log(body.slice(0, 500))).catch(() => process.exit(1))" \
+              && docker inspect -f '{{.State.Running}}' llmhq-network-sync | grep -q true; then
               echo "${GITHUB_SHA}" > "${base}/current.sha"
               exit 0
             fi

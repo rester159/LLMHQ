@@ -50,7 +50,7 @@ LLMHQ_HOST=127.0.0.1
 LLMHQ_AUTH_MODE=none
 ```
 
-Then product apps on the same host can call LLMHQ without an `Authorization` header. For Docker-to-Docker traffic, run LLMHQ and the product containers on the same private Docker network and keep the gateway off public/LAN ports.
+Then product apps on the same host can call LLMHQ without an `Authorization` header. In the default Compose setup, LLMHQ also runs a small server-local network sync service that connects the `llmhq` container to user-defined Docker bridge networks on the same server. Product containers can use `http://llmhq:8080` without joining a special LLMHQ network themselves. Host-native processes can use the loopback-only port `http://127.0.0.1:18088`.
 
 `npm run login:chatgpt:vnc` opens a persistent Playwright browser profile at `LLMHQ_CHATGPT_PROFILE_DIR` and exposes it through noVNC. If you publish the noVNC port for local setup, open `http://127.0.0.1:7900/vnc.html?autoconnect=1&resize=scale`. Log in manually with Google, then press Enter in the terminal. LLMHQ will reuse that browser profile for image generation.
 
@@ -72,13 +72,13 @@ Follow the OAuth URL/device-code prompts from your normal browser. The resulting
 
 ## Chat/Coding Calls
 
-From each product app, configure only the LLMHQ base URL:
+From each host-native product app, configure only the LLMHQ base URL:
 
 ```env
-LLMHQ_BASE_URL=http://127.0.0.1:8080
+LLMHQ_BASE_URL=http://127.0.0.1:18088
 ```
 
-If the product app is another container on the same Docker network, use the LLMHQ service/container name instead:
+If the product app is another container on the same server, use the LLMHQ service/container name instead:
 
 ```env
 LLMHQ_BASE_URL=http://llmhq:8080
@@ -219,8 +219,8 @@ Invoke-RestMethod `
 
 ## Operational Notes
 
-- The default Compose setup exposes the gateway only to containers on the private `llmhq_private` network as `http://llmhq:8080`.
-- For one-off local host access, temporarily publish `127.0.0.1:8080:8080` or `127.0.0.1:7900:7900` in Compose.
+- The default Compose setup exposes the gateway to same-server containers as `http://llmhq:8080` by automatically connecting the `llmhq` container to user-defined Docker bridge networks.
+- The default Compose setup also publishes a host-local port as `http://127.0.0.1:18088`; it is bound to loopback and is not exposed to the LAN.
 - Claude and Codex workers use persistent profile directories under `./data/profiles/...`.
 - Stored conversations live under `./data/conversations`.
 - Run `npm run doctor` or `docker compose exec llmhq npm run doctor` to verify CLI availability.
@@ -238,10 +238,18 @@ docker compose up -d
 docker compose logs -f llmhq
 ```
 
-Other product containers should join the `llmhq_private` Docker network and use:
+Other product containers on the same server can use:
 
 ```env
 LLMHQ_BASE_URL=http://llmhq:8080
+```
+
+The `llmhq-network-sync` sidecar watches Docker events and connects the `llmhq` container to user-defined bridge networks with the `llmhq` network alias. This keeps app containers isolated on their own networks while making LLMHQ reachable from each app network. It mounts `/var/run/docker.sock` so it should only run on a trusted local server.
+
+Host-native processes on the same server can use:
+
+```env
+LLMHQ_BASE_URL=http://127.0.0.1:18088
 ```
 
 For Unraid-style layouts where source and data live in sibling folders, set:
