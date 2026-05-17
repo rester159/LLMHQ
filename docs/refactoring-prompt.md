@@ -94,6 +94,8 @@ Implementation requirements:
 - Keep the client API close to the app's current LLM helper interface so call sites change minimally.
 - Centralize timeout, base URL, API key header, selected model, fallback, and error handling in that client.
 - Normalize provider errors into the app's existing error shape.
+- For provider errors, preserve LLMHQ's `code`, `message`, `retryable`, `auth_status`, `diagnostic`, and `attempts` fields in logs or user-facing operational reports.
+- If LLMHQ returns `auth_required` with `auth_status` such as `token_invalidated` or `refresh_token_reused`, do not change the request body or add app-side provider credentials. Report that the LLMHQ provider worker needs re-login.
 - Preserve streaming behavior only if the app already depends on streaming. If not, use non-streaming calls.
 - Remove unused direct provider SDK imports, CLI spawning, API key env vars, and provider-specific wrapper code after migration.
 - Update documentation and example env files.

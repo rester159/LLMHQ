@@ -82,9 +82,19 @@ export function classifyCliFailure(output, exitCode = 1) {
   const sanitizedOutput = sanitizeDiagnostic(text);
   const lower = text.toLowerCase();
 
-  if (lower.includes("login") || lower.includes("auth") || lower.includes("oauth") || lower.includes("unauthorized")) {
-    return new ProviderError("auth_required", "Provider CLI is not authenticated.", {
+  if (lower.includes("token_invalidated") || lower.includes("refresh_token_reused")) {
+    return new ProviderError("auth_required", "Provider CLI token has been invalidated. Re-authenticate the LLMHQ worker profile.", {
       exitCode,
+      authStatus: lower.includes("refresh_token_reused") ? "refresh_token_reused" : "token_invalidated",
+      repair: "reauthenticate_worker_profile",
+      output: sanitizedOutput,
+    });
+  }
+
+  if (lower.includes("login") || lower.includes("auth") || lower.includes("oauth") || lower.includes("unauthorized")) {
+    return new ProviderError("auth_required", "Provider CLI is not authenticated. Sign in to the LLMHQ worker profile.", {
+      exitCode,
+      repair: "reauthenticate_worker_profile",
       output: sanitizedOutput,
     });
   }

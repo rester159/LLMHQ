@@ -361,13 +361,20 @@ Example degraded response:
       "ok": false,
       "elapsed_ms": 1200,
       "code": "auth_required",
-      "message": "Provider CLI is not authenticated.",
+      "message": "Provider CLI token has been invalidated. Re-authenticate the LLMHQ worker profile.",
+      "retryable": false,
+      "auth_status": "refresh_token_reused",
+      "diagnostic": "Your authentication token has been invalidated. code: token_invalidated. Failed to refresh token: 401 Unauthorized. code: refresh_token_reused.",
       "attempts": [
         {
           "model": "claude-haiku",
           "worker": "claude-1",
           "status": "failed",
-          "code": "auth_required"
+          "code": "auth_required",
+          "message": "Provider CLI token has been invalidated. Re-authenticate the LLMHQ worker profile.",
+          "retryable": false,
+          "auth_status": "refresh_token_reused",
+          "diagnostic": "Your authentication token has been invalidated. code: token_invalidated. Failed to refresh token: 401 Unauthorized. code: refresh_token_reused."
         }
       ]
     }
@@ -933,6 +940,9 @@ LLMHQ returns errors in this shape:
   "error": {
     "code": "invalid_request",
     "message": "messages must be a non-empty array.",
+    "retryable": false,
+    "auth_status": null,
+    "diagnostic": null,
     "details": {},
     "attempts": []
   }
@@ -948,15 +958,15 @@ Common error codes:
 | `no_model_configured` | 400 | No model exists for the requested kind. |
 | `conversation_not_found` | 404 | Conversation id does not exist. |
 | `asset_not_found` | 404 | Asset id does not exist. |
-| `auth_required` | 503 | A provider session, usually ChatGPT browser, is not logged in or usable. |
+| `auth_required` | 503 | A provider session, such as Claude CLI, Codex CLI, or ChatGPT browser, is not logged in or usable. |
 | `provider_error` | 503 | A provider worker failed. |
 | `provider_timeout` | 503 | A provider worker timed out. |
 
-Provider failures include `attempts` when the dispatcher reached a provider worker.
+Provider failures include `attempts` when the dispatcher reached a provider worker. Each failed attempt includes the same `code`, `message`, `retryable`, `auth_status`, and sanitized `diagnostic` fields as the top-level error. When Codex returns `auth_status: "token_invalidated"` or `auth_status: "refresh_token_reused"`, the request payload reached LLMHQ correctly, but the Codex CLI worker profile must be re-authenticated. Application teams should not change the chat payload shape for that failure.
 
 ## Provider Login
 
-Provider login is outside the API. It is done through scripts inside the container or local workspace.
+Provider login is outside the application API. It is done through scripts inside the container or local workspace.
 
 Docker setup:
 
@@ -966,6 +976,8 @@ docker compose exec llmhq npm run login:claude -- claude-1
 docker compose exec llmhq npm run login:codex -- codex-1
 docker compose exec llmhq npm run login:chatgpt:vnc
 ```
+
+If Codex reports `token_invalidated` or `refresh_token_reused`, run the Codex login again for the LLMHQ worker profile. Do not fix this by copying `auth.json` from another machine or container profile; Codex refresh tokens rotate and copying them can invalidate one of the sessions.
 
 The ChatGPT noVNC helper exposes:
 

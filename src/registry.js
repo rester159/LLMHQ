@@ -126,6 +126,8 @@ export function createModelRegistry({
               status: "unavailable",
               lastFailureCode: worker.lastFailureCode || null,
               lastFailureAt: worker.lastFailureAt || null,
+              auth_status: worker.lastFailureAuthStatus || null,
+              diagnostic: worker.lastFailureDiagnostic || null,
               retryAt: new Date(worker.unavailableUntil).toISOString(),
             });
           } else {

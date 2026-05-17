@@ -133,7 +133,7 @@ export async function buildApp({
             },
             messages: [{ role: "user", content: "Reply with exactly ok." }],
             defaultChatModel: modelId,
-            markWorkerFailures: false,
+            markWorkerFailures: true,
           });
           results.push({
             model: modelId,
@@ -149,9 +149,7 @@ export async function buildApp({
             model: modelId,
             ok: false,
             elapsed_ms: Date.now() - started,
-            code: providerError.code,
-            message: providerError.message,
-            diagnostic: providerDiagnostic(providerError),
+            ...providerErrorFields(providerError),
             attempts: providerError.details?.attempts || [],
           });
         }
@@ -359,8 +357,7 @@ export async function buildApp({
       const status = providerError.code === "unknown_model" || providerError.code === "invalid_request" ? 400 : 503;
       return reply.code(status).send({
         error: {
-          code: providerError.code,
-          message: providerError.message,
+          ...providerErrorFields(providerError),
           details: providerError.details,
           attempts,
         },
@@ -562,11 +559,16 @@ async function tryModelWithFallbacks(
           status: "skipped",
           code: unavailable.code,
           message: `Skipped because ${worker.id} is marked unavailable until ${unavailable.retryAt}.`,
+          retryable: true,
+          auth_status: unavailable.authStatus,
+          diagnostic: unavailable.diagnostic,
+          retry_at: unavailable.retryAt,
         });
         onStatus?.("worker_skipped", `${worker.id} skipped: ${unavailable.code}.`, {
           model: candidate.id,
           worker: worker.id,
           code: unavailable.code,
+          auth_status: unavailable.authStatus,
           retry_at: unavailable.retryAt,
         });
         continue;
@@ -600,14 +602,13 @@ async function tryModelWithFallbacks(
           model: candidate.id,
           worker: worker.id,
           status: "failed",
-          code: providerError.code,
-          message: providerError.message,
-          diagnostic: providerDiagnostic(providerError),
+          ...providerErrorFields(providerError),
         };
         onStatus?.("worker_failed", `${worker.id} failed: ${providerError.code}.`, {
           model: candidate.id,
           worker: worker.id,
           code: providerError.code,
+          auth_status: providerError.details?.authStatus || null,
         });
         markWorkerUnavailable(worker, providerError, workerFailureCooldownMs);
         lastError = providerError;
@@ -628,6 +629,8 @@ function workerUnavailable(worker) {
   }
   return {
     code: worker.lastFailureCode || "provider_unavailable",
+    authStatus: worker.lastFailureAuthStatus || null,
+    diagnostic: worker.lastFailureDiagnostic || null,
     retryAt: new Date(worker.unavailableUntil).toISOString(),
   };
 }
@@ -638,6 +641,8 @@ function markWorkerUnavailable(worker, error, cooldownMs) {
   }
   worker.lastFailureCode = error.code;
   worker.lastFailureAt = new Date().toISOString();
+  worker.lastFailureAuthStatus = error.details?.authStatus || null;
+  worker.lastFailureDiagnostic = providerDiagnostic(error);
   worker.unavailableUntil = Date.now() + cooldownMs;
 }
 
@@ -646,7 +651,39 @@ function stickyWorkerFailure(code) {
 }
 
 function providerDiagnostic(error) {
-  return error?.details?.output || error?.details?.stderr || null;
+  return sanitizeDiagnostic(error?.details?.output || error?.details?.stderr || null);
+}
+
+function providerErrorFields(error) {
+  return {
+    code: error.code,
+    message: error.message,
+    retryable: providerErrorRetryable(error),
+    auth_status: error.details?.authStatus || null,
+    diagnostic: providerDiagnostic(error),
+  };
+}
+
+function providerErrorRetryable(error) {
+  if (error.details?.authStatus) {
+    return false;
+  }
+  if (error.code === "auth_required" || error.code === "invalid_request" || error.code === "unknown_model") {
+    return false;
+  }
+  return ["rate_limited", "worker_timeout", "worker_spawn_failed", "provider_error"].includes(error.code);
+}
+
+function sanitizeDiagnostic(value) {
+  if (!value) {
+    return null;
+  }
+  return String(value)
+    .replace(/(api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|authorization)(["'\s:=]+)([^"'\s,}]+)/gi, "$1$2[redacted]")
+    .replace(/Bearer\s+[A-Za-z0-9._~+/-]+=*/gi, "Bearer [redacted]")
+    .replace(/sk-[A-Za-z0-9_-]{20,}/g, "sk-[redacted]")
+    .replace(/[A-Za-z0-9_-]{40,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}/g, "[jwt-redacted]")
+    .slice(0, 2000);
 }
 
 function candidateModelIds(model, fallbackPolicy) {
@@ -742,8 +779,7 @@ async function sendLiveChatCompletionStream(reply, { run, emitStatusEvents = fal
     const providerError = toProviderError(error);
     writeSseEvent(reply, "error", {
       error: {
-        code: providerError.code,
-        message: providerError.message,
+        ...providerErrorFields(providerError),
         details: providerError.details,
         attempts: providerError.details?.attempts || [],
       },
@@ -828,8 +864,7 @@ function sendProviderError(reply, error) {
         : 503;
   return reply.code(status).send({
     error: {
-      code: providerError.code,
-      message: providerError.message,
+      ...providerErrorFields(providerError),
       details: providerError.details,
       attempts: providerError.details?.attempts || [],
     },
