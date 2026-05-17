@@ -402,6 +402,52 @@ Example degraded response:
 
 The admin WebUI exposes this as the Provider Probe button.
 
+### `POST /admin/provider-login`
+
+Starts an admin provider-login helper inside the LLMHQ API container. This is for provider account authentication, not product-app authentication.
+
+The currently supported WebUI login flow is Codex device auth:
+
+```http
+POST /admin/provider-login
+Content-Type: application/json
+```
+
+```json
+{
+  "provider": "codex",
+  "worker": "codex-1",
+  "mode": "device"
+}
+```
+
+Example response:
+
+```json
+{
+  "status": "ok",
+  "session": {
+    "id": "login_lx1abc_1a2b3c",
+    "provider": "codex",
+    "worker": "codex-1",
+    "profileDir": "/app/data/profiles/codex-1",
+    "mode": "device",
+    "status": "running",
+    "output": "Starting Codex device login..."
+  }
+}
+```
+
+Open the printed device URL in any browser, enter the displayed code, and finish Google login. The login process writes the official Codex CLI tokens into the worker profile directory.
+
+### `GET /admin/provider-login/:sessionId`
+
+Returns the current provider-login session state and accumulated sanitized output.
+
+```http
+GET /admin/provider-login/login_lx1abc_1a2b3c
+```
+
 ### `GET /v1/models`
 
 Returns configured model aliases.
@@ -985,7 +1031,14 @@ Provider failures include `attempts` when the dispatcher reached a provider work
 
 ## Provider Login
 
-Provider login is outside the application API. It is done through scripts inside the container or local workspace.
+Provider login is outside the product application API. It can be done through the admin WebUI or through scripts inside the container/local workspace.
+
+WebUI setup:
+
+1. Open `http://<server-ip>:18089/admin`.
+2. Click `Start Codex Device Login`.
+3. Open the printed URL, enter the displayed device code, and finish Google login.
+4. Click `Provider Probe` and verify `codex-gpt-5.5`.
 
 Docker setup:
 
