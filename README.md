@@ -13,7 +13,7 @@ This first slice implements a local chat/coding gateway for Claude Code and Code
 - `GET /v1/models` lists configured models and fallback chains.
 - `GET /v1/conversations` lists stored conversations, optionally filtered by `project_id`.
 - `GET /v1/assets/:assetId` serves generated assets from local disk.
-- `GET /health` reports gateway and worker health.
+- `GET /health` reports gateway instance identity and worker health.
 - `GET /admin` serves the server admin WebUI.
 - Bearer API keys gate requests by default. Configure keys with `LLMHQ_API_KEYS`.
 - Same-server deployments can set `LLMHQ_AUTH_MODE=none` when LLMHQ is bound only to localhost or a private Docker network.
@@ -131,7 +131,7 @@ Available v1 chat model aliases:
 - `codex-gpt-5.5`
 - `codex-gpt-5.5-vision`
 
-Fallback is explicit. If `claude-opus` fails and `claude-sonnet` succeeds, the response includes `requested_model`, `used_model`, `fallback_used`, `fallback_reason`, and `attempts`.
+Fallback is explicit. If `claude-opus` fails and `claude-sonnet` succeeds, the response includes `requested_model`, `used_model`, `llmhq`, `fallback_used`, `fallback_reason`, and `attempts`.
 
 Use `codex-gpt-5.5` for Codex text/code turns. Use `codex-gpt-5.5-vision` for Codex image-input turns that include `image_url` message parts pointing at local image paths. Use `chatgpt-image-browser` through `/v1/images/generations` for image output.
 
@@ -247,7 +247,7 @@ Invoke-RestMethod `
 - Runtime model aliases, provider profile directories, provider-native model arguments, default model, and fallback chains are stored in `./data/settings.json` by default and can be edited through the admin WebUI.
 - The admin WebUI includes Provider Login for Codex device auth and Provider Probe for visible provider-session checks. Provider Probe sends a minimal request per provider and exposes `auth_required` as an LLMHQ/provider-session problem before product apps hit it.
 - Provider failure responses include `retryable`, `auth_status`, and sanitized `diagnostic` fields so product apps can report provider account problems accurately instead of treating them as payload format errors.
-- If a provider worker fails with sticky state such as `auth_required`, LLMHQ marks that worker unavailable briefly and skips other aliases using the same worker so fallback can reach a different provider faster.
+- If a provider worker fails with sticky state such as `auth_required`, LLMHQ marks that worker unavailable briefly and skips other aliases using the same failure domain so fallback can reach a different provider faster. Downstream apps should log `llmhq.instance_id` and `attempts[].failure_domain` so app failures can be matched to the exact LLMHQ process and provider profile that served them.
 - Claude and Codex workers use persistent profile directories under `./data/profiles/...`.
 - Stored conversations live under `./data/conversations`.
 - Run `npm run doctor` or `docker compose exec llmhq npm run doctor` to verify CLI availability.

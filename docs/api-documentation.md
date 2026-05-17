@@ -154,6 +154,7 @@ Every chat response includes:
 - `requested_model`
 - `used_model`
 - `used_worker`
+- `llmhq`
 - `fallback_used`
 - `fallback_reason`
 - `attempts`
@@ -168,6 +169,7 @@ Successful attempt:
 {
   "model": "claude-sonnet",
   "worker": "claude-1",
+  "failure_domain": "claude:/app/data/profiles/claude-1",
   "status": "succeeded"
 }
 ```
@@ -178,15 +180,16 @@ Failed attempt:
 {
   "model": "claude-sonnet",
   "worker": "claude-1",
+  "failure_domain": "claude:/app/data/profiles/claude-1",
   "status": "failed",
   "code": "provider_error",
   "message": "Provider-specific failure message."
 }
 ```
 
-Apps should log these records when debugging provider availability. A response with `fallback_used: true` is still a successful response.
+Apps should log these records when debugging provider availability. `failure_domain` identifies the account/session profile being used. For example, `claude-haiku` and `claude-sonnet` may be different model aliases but the same failure domain if both use `claude-1`. A response with `fallback_used: true` is still a successful response.
 
-When a worker fails with sticky provider state such as `auth_required`, `rate_limited`, `worker_spawn_failed`, or `worker_timeout`, LLMHQ marks that worker unavailable for `LLMHQ_WORKER_FAILURE_COOLDOWN_MS`. During that cooldown, other model aliases that use the same worker are skipped so fallback can reach a different provider instead of repeatedly hitting the same dead session.
+When a worker fails with sticky provider state such as `auth_required`, `rate_limited`, `worker_spawn_failed`, or `worker_timeout`, LLMHQ marks that worker unavailable for `LLMHQ_WORKER_FAILURE_COOLDOWN_MS`. During that cooldown, and within the same request, other model aliases that share the same failure domain are skipped so fallback can reach a different provider instead of repeatedly hitting the same dead session.
 
 ## Endpoints
 
@@ -205,6 +208,12 @@ Example response:
 ```json
 {
   "status": "ok",
+  "instance": {
+    "instance_id": "llmhq-host-18-abc123xy",
+    "started_at": "2026-05-17T21:55:00.000Z",
+    "hostname": "llmhq-host",
+    "pid": 18
+  },
   "auth_mode": "none",
   "providers": [
     {
@@ -212,6 +221,7 @@ Example response:
       "status": "configured",
       "command": "claude",
       "profileDir": "/app/data/profiles/claude-1",
+      "failure_domain": "claude:/app/data/profiles/claude-1",
       "capabilities": ["chat", "vision"]
     },
     {
@@ -220,6 +230,7 @@ Example response:
       "command": "codex",
       "profileDir": "/app/data/profiles/codex-1",
       "workdir": "/app/data/codex-workdir",
+      "failure_domain": "codex:/app/data/profiles/codex-1",
       "capabilities": ["chat", "code", "vision"]
     },
     {
@@ -237,6 +248,7 @@ Notes:
 
 - This endpoint does not prove the provider is logged in. It reports configured worker health.
 - A provider may still fail during a generation call if its subscription, session, or provider UI is unavailable.
+- `instance.instance_id` should be logged by downstream apps when comparing app failures with admin probes. If the ids differ, the app and the admin probe are not hitting the same live LLMHQ process.
 
 ### `GET /admin`
 
@@ -541,12 +553,19 @@ Example response:
   "requested_model": "claude-sonnet",
   "used_model": "claude-sonnet",
   "used_worker": "claude-1",
+  "llmhq": {
+    "instance_id": "llmhq-host-18-abc123xy",
+    "started_at": "2026-05-17T21:55:00.000Z",
+    "hostname": "llmhq-host",
+    "pid": 18
+  },
   "fallback_used": false,
   "fallback_reason": null,
   "attempts": [
     {
       "model": "claude-sonnet",
       "worker": "claude-1",
+      "failure_domain": "claude:/app/data/profiles/claude-1",
       "status": "succeeded"
     }
   ],

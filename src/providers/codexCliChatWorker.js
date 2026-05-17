@@ -12,6 +12,7 @@ export class CodexCliChatWorker {
     this.profileDir = profileDir;
     this.workdir = workdir;
     this.timeoutMs = timeoutMs;
+    this.failureDomain = `codex:${profileDir || command}`;
     this.queue = Promise.resolve();
   }
 
@@ -22,6 +23,7 @@ export class CodexCliChatWorker {
       command: this.command,
       profileDir: this.profileDir,
       workdir: this.workdir,
+      failure_domain: this.failureDomain,
       capabilities: ["chat", "code", "vision"],
     };
   }

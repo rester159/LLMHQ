@@ -73,6 +73,8 @@ test("health is public and includes providers", async () => {
   assert.equal(response.statusCode, 200);
   const body = response.json();
   assert.equal(body.status, "ok");
+  assert.match(body.instance.instance_id, /.+/);
+  assert.match(body.instance.started_at, /^\d{4}-\d{2}-\d{2}T/);
   assert.equal(body.providers[0].id, "fake-image");
 });
 
@@ -188,7 +190,9 @@ test("chat completions return OpenAI-compatible content", async () => {
   assert.equal(body.fallback_used, false);
   assert.equal(body.choices[0].message.role, "assistant");
   assert.match(body.choices[0].message.content, /sonnet says: hello/);
-  assert.deepEqual(body.attempts, [{ model: "claude-sonnet", worker: "fake-sonnet", status: "succeeded" }]);
+  assert.deepEqual(body.attempts, [
+    { model: "claude-sonnet", worker: "fake-sonnet", failure_domain: "fake-sonnet", status: "succeeded" },
+  ]);
 });
 
 test("models endpoint lists configured chat aliases", async () => {

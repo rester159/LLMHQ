@@ -9,6 +9,7 @@ export class ClaudeCliChatWorker {
     this.command = command;
     this.profileDir = profileDir;
     this.timeoutMs = timeoutMs;
+    this.failureDomain = `claude:${profileDir || command}`;
     this.queue = Promise.resolve();
   }
 
@@ -18,6 +19,7 @@ export class ClaudeCliChatWorker {
       status: "configured",
       command: this.command,
       profileDir: this.profileDir,
+      failure_domain: this.failureDomain,
       capabilities: ["chat", "vision"],
     };
   }
