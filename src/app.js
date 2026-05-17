@@ -151,6 +151,7 @@ export async function buildApp({
             elapsed_ms: Date.now() - started,
             code: providerError.code,
             message: providerError.message,
+            diagnostic: providerDiagnostic(providerError),
             attempts: providerError.details?.attempts || [],
           });
         }
@@ -601,6 +602,7 @@ async function tryModelWithFallbacks(
           status: "failed",
           code: providerError.code,
           message: providerError.message,
+          diagnostic: providerDiagnostic(providerError),
         };
         onStatus?.("worker_failed", `${worker.id} failed: ${providerError.code}.`, {
           model: candidate.id,
@@ -641,6 +643,10 @@ function markWorkerUnavailable(worker, error, cooldownMs) {
 
 function stickyWorkerFailure(code) {
   return ["auth_required", "rate_limited", "worker_spawn_failed", "worker_timeout"].includes(code);
+}
+
+function providerDiagnostic(error) {
+  return error?.details?.output || error?.details?.stderr || null;
 }
 
 function candidateModelIds(model, fallbackPolicy) {

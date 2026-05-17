@@ -25,6 +25,9 @@ if (!worker) {
 
 if (worker.profileDir) {
   await fs.mkdir(worker.profileDir, { recursive: true });
+  if (provider === "codex") {
+    await fs.mkdir(`${worker.profileDir}/.codex`, { recursive: true });
+  }
 }
 
 const command = providerConfig.command;
@@ -37,7 +40,7 @@ const env =
   provider === "claude" && worker.profileDir
     ? { ...process.env, HOME: worker.profileDir, USERPROFILE: worker.profileDir }
     : provider === "codex" && worker.profileDir
-      ? { ...process.env, CODEX_HOME: worker.profileDir }
+      ? { ...process.env, CODEX_HOME: worker.profileDir, HOME: worker.profileDir, USERPROFILE: worker.profileDir }
       : process.env;
 
 console.log(`Logging in ${provider} worker ${worker.id}`);
