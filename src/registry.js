@@ -9,6 +9,7 @@ export function createModelRegistry({
   claude = null,
   codex = null,
   fakeChatModels = null,
+  settings = null,
 }) {
   const models = new Map();
 
@@ -48,7 +49,9 @@ export function createModelRegistry({
     }
   }
 
-  if (claude?.enabled) {
+  if (settings) {
+    addSettingsChatModels(models, settings, { claude, codex });
+  } else if (claude?.enabled) {
     const workers = buildClaudeWorkers(claude);
     addChatModel(models, "claude-haiku", workers, claude.models.haiku, ["claude-sonnet", "codex-gpt-5.5"], [
       "chat",
@@ -67,7 +70,7 @@ export function createModelRegistry({
     ]);
   }
 
-  if (codex?.enabled) {
+  if (!settings && codex?.enabled) {
     const workers = buildCodexWorkers(codex);
     addChatModel(models, "codex-gpt-5.5", workers, codex.model, ["claude-sonnet"], [
       "chat",
@@ -88,6 +91,9 @@ export function createModelRegistry({
     },
 
     defaultModel(kind = "chat") {
+      if (kind === "chat" && settings?.defaultModel && models.has(settings.defaultModel)) {
+        return settings.defaultModel;
+      }
       const preferred = kind === "chat" ? ["claude-sonnet", "codex-gpt-5.5"] : ["chatgpt-image-browser", "fake-image"];
       for (const id of preferred) {
         if (models.has(id)) {
@@ -120,10 +126,51 @@ export function createModelRegistry({
   };
 }
 
-function addChatModel(models, id, workers, cliModel, fallback, capabilities) {
+function addSettingsChatModels(models, settings, providerConfig) {
+  const workerCache = new Map();
+  for (const [id, model] of Object.entries(settings.models || {})) {
+    if (model.enabled === false) {
+      continue;
+    }
+    const workers = getProviderWorkers(workerCache, model.provider, settings, providerConfig);
+    addChatModel(models, id, workers, model.cliModel, model.fallback || [], model.capabilities || ["chat"], model.provider);
+  }
+}
+
+function getProviderWorkers(cache, provider, settings, providerConfig) {
+  if (cache.has(provider)) {
+    return cache.get(provider);
+  }
+
+  let workers;
+  if (provider === "claude") {
+    workers = buildClaudeWorkers({
+      ...(providerConfig.claude || {}),
+      command: providerConfig.claude?.command || "claude",
+      timeoutMs: providerConfig.claude?.timeoutMs || 180000,
+      workers: settings.workers?.claude || providerConfig.claude?.workers || [],
+    });
+  } else if (provider === "codex") {
+    workers = buildCodexWorkers({
+      ...(providerConfig.codex || {}),
+      command: providerConfig.codex?.command || "codex",
+      timeoutMs: providerConfig.codex?.timeoutMs || 180000,
+      workdir: providerConfig.codex?.workdir || process.cwd(),
+      workers: settings.workers?.codex || providerConfig.codex?.workers || [],
+    });
+  } else {
+    throw new ProviderError("invalid_request", `Unsupported provider: ${provider}`);
+  }
+
+  cache.set(provider, workers);
+  return workers;
+}
+
+function addChatModel(models, id, workers, cliModel, fallback, capabilities, provider = null) {
   models.set(id, {
     id,
     kind: "chat",
+    provider,
     capabilities,
     output: ["text"],
     workers,

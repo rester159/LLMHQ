@@ -234,13 +234,100 @@ Notes:
 
 ### `GET /admin`
 
-Serves the read-only admin WebUI. The page loads gateway status from the companion admin service at:
+Serves the admin WebUI. The page loads gateway status from the companion admin service at:
 
 ```http
 GET /admin/api/summary
 ```
 
-The current UI shows configured provider accounts, model aliases, and fallback chains. It does not yet edit accounts, model aliases, or fallback policies.
+The UI shows configured provider accounts, model aliases, fallback chains, and editable runtime settings. Saving runtime settings writes `LLMHQ_SETTINGS_FILE` and hot-swaps LLMHQ's live model registry without restarting the container.
+
+### `GET /admin/settings`
+
+Returns the live runtime settings from the API service.
+
+Request:
+
+```http
+GET /admin/settings
+```
+
+Example response:
+
+```json
+{
+  "status": "ok",
+  "editable": true,
+  "settings": {
+    "version": 1,
+    "defaultModel": "claude-sonnet",
+    "workers": {
+      "claude": [
+        { "id": "claude-1", "profileDir": "/app/data/profiles/claude-1" }
+      ],
+      "codex": [
+        { "id": "codex-1", "profileDir": "/app/data/profiles/codex-1" }
+      ]
+    },
+    "models": {
+      "claude-haiku": {
+        "enabled": true,
+        "provider": "claude",
+        "cliModel": "haiku",
+        "capabilities": ["chat", "vision", "fast"],
+        "fallback": ["claude-sonnet", "codex-gpt-5.5"]
+      },
+      "claude-sonnet": {
+        "enabled": true,
+        "provider": "claude",
+        "cliModel": "sonnet",
+        "capabilities": ["chat", "vision", "smart"],
+        "fallback": ["codex-gpt-5.5"]
+      }
+    }
+  }
+}
+```
+
+### `PUT /admin/settings`
+
+Validates, persists, and applies runtime settings. The response includes the saved settings and rebuilt model list.
+
+Request:
+
+```http
+PUT /admin/settings
+Content-Type: application/json
+```
+
+Body is either the settings object itself or `{ "settings": { ... } }`.
+
+Editable fields:
+
+- `defaultModel`: LLMHQ model alias used when a chat call omits `model`.
+- `workers.claude`: Claude worker accounts and profile directories.
+- `workers.codex`: Codex worker accounts and profile directories.
+- `models.<alias>.enabled`: whether the model alias is served.
+- `models.<alias>.provider`: `claude` or `codex`.
+- `models.<alias>.cliModel`: provider-native model argument passed to the CLI.
+- `models.<alias>.capabilities`: metadata returned by `/v1/models`.
+- `models.<alias>.fallback`: ordered fallback alias list used by `"fallback": "default"`.
+
+Notes:
+
+- Adding a worker profile path does not authenticate that provider account. The profile must still be logged in through the provider CLI login flow.
+- If a call returns `auth_required`, the app reached LLMHQ and LLMHQ reached the provider worker, but the provider CLI session is not usable.
+- If a call returns `unknown_model`, the requested alias is disabled or missing from settings.
+
+### `POST /admin/settings/reload`
+
+Reloads `LLMHQ_SETTINGS_FILE` from disk and rebuilds the live registry.
+
+Request:
+
+```http
+POST /admin/settings/reload
+```
 
 ### `GET /v1/models`
 
@@ -318,7 +405,7 @@ $body = @{
 
 Invoke-RestMethod `
   -Method Post `
-  -Uri http://127.0.0.1:8080/v1/chat/completions `
+  -Uri http://127.0.0.1:18088/v1/chat/completions `
   -ContentType "application/json" `
   -Body $body
 ```
@@ -577,7 +664,7 @@ $body = @{
 
 Invoke-RestMethod `
   -Method Post `
-  -Uri http://127.0.0.1:8080/v1/conversations/messages `
+  -Uri http://127.0.0.1:18088/v1/conversations/messages `
   -ContentType "application/json" `
   -Body $body
 ```
@@ -724,7 +811,7 @@ $body = @{
 
 Invoke-RestMethod `
   -Method Post `
-  -Uri http://127.0.0.1:8080/v1/images/generations `
+  -Uri http://127.0.0.1:18088/v1/images/generations `
   -ContentType "application/json" `
   -Body $body `
   -TimeoutSec 120
@@ -777,7 +864,7 @@ Example PowerShell download:
 
 ```powershell
 Invoke-WebRequest `
-  -Uri http://127.0.0.1:8080/v1/assets/img_68760674-64f3-4dc1-8733-f99df8ebc2d1 `
+  -Uri http://127.0.0.1:18088/v1/assets/img_68760674-64f3-4dc1-8733-f99df8ebc2d1 `
   -OutFile D:\LLMHQ\data\test-image.png
 ```
 
@@ -850,6 +937,7 @@ Log in interactively with Google in the remote browser, then press Enter in the 
 | `LLMHQ_API_KEYS` | `dev-local-key` | Comma-separated bearer keys for token mode. |
 | `LLMHQ_ASSET_DIR` | `./data/assets` | Generated asset storage. |
 | `LLMHQ_CONVERSATION_DIR` | `./data/conversations` | Conversation JSON storage. |
+| `LLMHQ_SETTINGS_FILE` | `./data/settings.json` | Runtime model, worker, default model, and fallback settings. |
 | `LLMHQ_DEFAULT_CHAT_MODEL` | `claude-sonnet` | Default chat model. |
 | `LLMHQ_CHAT_TIMEOUT_MS` | `180000` | Default provider timeout. |
 | `LLMHQ_MAX_CONVERSATION_MESSAGES` | `60` | Stateful context window in messages. |
@@ -903,6 +991,18 @@ The `llmhq-network-sync` sidecar automatically connects LLMHQ to user-defined Do
 
 No bearer token is required if LLMHQ is running with `LLMHQ_AUTH_MODE=none`.
 
+### Same-Server Integration Troubleshooting
+
+Use this decision table before changing payload code:
+
+| Symptom | Meaning | Fix |
+| --- | --- | --- |
+| `ENOTFOUND llmhq` | App container is not on a Docker network where the `llmhq` alias exists yet. | Keep `LLMHQ_BASE_URL=http://llmhq:8080`; verify the `llmhq-network-sync` container is running and wait for it to attach LLMHQ to the app network. |
+| Connection refused to `127.0.0.1` from an app container | The app is calling itself, not LLMHQ. | Use `http://llmhq:8080` from containers. |
+| Connection refused to `10.0.5.202:18088` from another machine | The host API port is loopback-only by design. | Use the WebUI on `http://10.0.5.202:18089/admin` from a browser; apps on the Unraid host use `http://127.0.0.1:18088`. |
+| `invalid_request` | The JSON body does not match the endpoint contract. | Keep OpenAI-style `messages`, `model`, `fallback`, and `stream` fields for `/v1/chat/completions`. |
+| `auth_required` with an `attempts` entry | The request reached LLMHQ and selected a provider worker, but the provider CLI account is not authenticated or usable. | Re-login or fix the provider account in LLMHQ; the calling app should not change payload shape. |
+
 ## Minimal Client Behavior
 
 Every product app should centralize LLMHQ calls in one client module.
@@ -921,8 +1021,8 @@ The client should:
 Run these after startup:
 
 ```powershell
-Invoke-RestMethod http://127.0.0.1:8080/health | ConvertTo-Json -Depth 8
-Invoke-RestMethod http://127.0.0.1:8080/v1/models | ConvertTo-Json -Depth 8
+Invoke-RestMethod http://127.0.0.1:18088/health | ConvertTo-Json -Depth 8
+Invoke-RestMethod http://127.0.0.1:18088/v1/models | ConvertTo-Json -Depth 8
 ```
 
 Run tests:

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -22,6 +23,33 @@ function testConfig(assetDir) {
     },
     chatgpt: {
       enabled: false,
+    },
+  };
+}
+
+function runtimeConfig(assetDir) {
+  return {
+    ...testConfig(assetDir),
+    authMode: "none",
+    settingsFile: path.join(assetDir, "settings.json"),
+    claude: {
+      enabled: true,
+      command: "claude",
+      timeoutMs: 1000,
+      workers: [{ id: "claude-1", profileDir: path.join(assetDir, "profiles", "claude-1") }],
+      models: {
+        haiku: "haiku",
+        sonnet: "sonnet",
+        opus: "opus",
+      },
+    },
+    codex: {
+      enabled: true,
+      command: "codex",
+      timeoutMs: 1000,
+      workdir: path.join(assetDir, "codex-workdir"),
+      workers: [{ id: "codex-1", profileDir: path.join(assetDir, "profiles", "codex-1") }],
+      model: "gpt-5.5",
     },
   };
 }
@@ -653,8 +681,74 @@ test("conversation list can filter by project", async () => {
   assert.equal(response.json().data[0].project_id, "one");
 });
 
+test("admin settings persist and rebuild model fallback chains", async () => {
+  const assetDir = path.join(os.tmpdir(), `llmhq-test-${Date.now()}-settings`);
+  const app = await buildApp({
+    fastify: Fastify(),
+    config: runtimeConfig(assetDir),
+    assetStore: new AssetStore(assetDir),
+  });
+
+  const initial = await app.inject({ method: "GET", url: "/admin/settings" });
+  assert.equal(initial.statusCode, 200);
+  const settings = initial.json().settings;
+  assert.deepEqual(settings.models["claude-haiku"].fallback, ["claude-sonnet", "codex-gpt-5.5"]);
+
+  const changed = {
+    ...settings,
+    models: {
+      ...settings.models,
+      "claude-haiku": {
+        ...settings.models["claude-haiku"],
+        fallback: ["codex-gpt-5.5"],
+      },
+    },
+  };
+  const saved = await app.inject({
+    method: "PUT",
+    url: "/admin/settings",
+    payload: changed,
+  });
+  assert.equal(saved.statusCode, 200);
+  assert.deepEqual(saved.json().settings.models["claude-haiku"].fallback, ["codex-gpt-5.5"]);
+
+  const models = await app.inject({ method: "GET", url: "/v1/models" });
+  assert.equal(models.statusCode, 200);
+  const haiku = models.json().data.find((model) => model.id === "claude-haiku");
+  assert.deepEqual(haiku.fallback, ["codex-gpt-5.5"]);
+  assert.equal(haiku.cli_model, "haiku");
+
+  const persisted = JSON.parse(await fs.readFile(path.join(assetDir, "settings.json"), "utf8"));
+  assert.deepEqual(persisted.models["claude-haiku"].fallback, ["codex-gpt-5.5"]);
+});
+
 test("admin webui renders and summarizes gateway state", async () => {
-  const fetchImpl = async (url) => {
+  const settingsPayload = {
+    version: 1,
+    defaultModel: "claude-sonnet",
+    workers: {
+      claude: [{ id: "claude-1", profileDir: "/app/data/profiles/claude-1" }],
+      codex: [],
+    },
+    models: {
+      "claude-haiku": {
+        enabled: true,
+        provider: "claude",
+        cliModel: "haiku",
+        capabilities: ["chat", "fast"],
+        fallback: ["claude-sonnet", "codex-gpt-5.5"],
+      },
+      "claude-sonnet": {
+        enabled: true,
+        provider: "claude",
+        cliModel: "sonnet",
+        capabilities: ["chat", "smart"],
+        fallback: [],
+      },
+    },
+  };
+  let savedSettings = null;
+  const fetchImpl = async (url, options = {}) => {
     if (String(url).endsWith("/health")) {
       return jsonResponse({
         status: "ok",
@@ -683,6 +777,38 @@ test("admin webui renders and summarizes gateway state", async () => {
         ],
       });
     }
+    if (String(url).endsWith("/admin/settings") && (options.method || "GET") === "GET") {
+      return jsonResponse({
+        status: "ok",
+        editable: true,
+        settings: settingsPayload,
+        models: [],
+      });
+    }
+    if (String(url).endsWith("/admin/settings") && options.method === "PUT") {
+      savedSettings = JSON.parse(options.body).models["claude-haiku"].fallback;
+      return jsonResponse({
+        status: "ok",
+        editable: true,
+        settings: JSON.parse(options.body),
+        models: [
+          {
+            id: "claude-haiku",
+            capabilities: ["chat", "fast"],
+            output: ["text"],
+            fallback: savedSettings,
+          },
+        ],
+      });
+    }
+    if (String(url).endsWith("/admin/settings/reload") && options.method === "POST") {
+      return jsonResponse({
+        status: "ok",
+        editable: true,
+        settings: settingsPayload,
+        models: [],
+      });
+    }
     return { ok: false, status: 404, json: async () => ({}) };
   };
 
@@ -701,6 +827,26 @@ test("admin webui renders and summarizes gateway state", async () => {
   assert.equal(summary.statusCode, 200);
   assert.equal(summary.json().health.providers[0].id, "claude-1");
   assert.equal(summary.json().models[0].id, "claude-haiku");
+  assert.equal(summary.json().settings.defaultModel, "claude-sonnet");
+
+  const saved = await app.inject({
+    method: "PUT",
+    url: "/admin/api/settings",
+    payload: {
+      settings: {
+        ...settingsPayload,
+        models: {
+          ...settingsPayload.models,
+          "claude-haiku": {
+            ...settingsPayload.models["claude-haiku"],
+            fallback: ["claude-sonnet"],
+          },
+        },
+      },
+    },
+  });
+  assert.equal(saved.statusCode, 200);
+  assert.deepEqual(savedSettings, ["claude-sonnet"]);
 });
 
 function jsonResponse(payload) {

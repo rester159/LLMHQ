@@ -21,9 +21,9 @@ This first slice implements a local chat/coding gateway for Claude Code and Code
 
 ## Documentation
 
-- [Planning API documentation](planning/api-documentation.md)
-- [Technical architecture](docs/technical-architecture.md)
-- [Product requirements](docs/prd.md)
+- [API documentation](docs/api-documentation.md)
+- [Technical architecture](planning/technical-architecture.md)
+- [Product requirements](planning/prd.md)
 - [App refactoring prompt](docs/refactoring-prompt.md)
 - [Security notes](SECURITY.md)
 - [Contributing](CONTRIBUTING.md)
@@ -51,7 +51,7 @@ LLMHQ_HOST=127.0.0.1
 LLMHQ_AUTH_MODE=none
 ```
 
-Then product apps on the same host can call LLMHQ without an `Authorization` header. In the default Compose setup, LLMHQ also runs a small server-local network sync service that connects the `llmhq` container to user-defined Docker bridge networks on the same server. Product containers can use `http://llmhq:8080` without joining a special LLMHQ network themselves. Host-native processes can use the loopback-only port `http://127.0.0.1:18088`. The Unraid WebUI entry opens the read-only admin UI at `http://[IP]:[PORT:18089]/admin`.
+Then product apps on the same host can call LLMHQ without an `Authorization` header. In the default Compose setup, LLMHQ also runs a small server-local network sync service that connects the `llmhq` container to user-defined Docker bridge networks on the same server. Product containers can use `http://llmhq:8080` without joining a special LLMHQ network themselves. Host-native processes can use the loopback-only port `http://127.0.0.1:18088`. The Unraid WebUI entry opens the admin UI at `http://[IP]:[PORT:18089]/admin`.
 
 `npm run login:chatgpt:vnc` opens a persistent Playwright browser profile at `LLMHQ_CHATGPT_PROFILE_DIR` and exposes it through noVNC. If you publish the noVNC port for local setup, open `http://127.0.0.1:7900/vnc.html?autoconnect=1&resize=scale`. Log in manually with Google, then press Enter in the terminal. LLMHQ will reuse that browser profile for image generation.
 
@@ -101,7 +101,7 @@ The `llmhq` and `llmhq-webui` containers include the Unraid label:
 net.unraid.docker.webui: "http://[IP]:[PORT:18089]/admin"
 ```
 
-That makes the WebUI action available from the Unraid Docker container menu. The current UI is read-only: it shows gateway status, configured provider accounts, model aliases, and fallback chains. Mutating account/model/fallback configuration still lives in Compose/env and code-backed model registry configuration.
+That makes the WebUI action available from the Unraid Docker container menu. The UI shows gateway status, configured provider accounts, model aliases, fallback chains, and the editable runtime settings JSON. Saving runtime settings writes `LLMHQ_SETTINGS_FILE` and hot-swaps the live model registry without restarting LLMHQ.
 
 ```powershell
 $body = @{
@@ -116,7 +116,7 @@ $body = @{
 
 Invoke-RestMethod `
   -Method Post `
-  -Uri http://127.0.0.1:8080/v1/chat/completions `
+  -Uri http://127.0.0.1:18088/v1/chat/completions `
   -ContentType "application/json" `
   -Body $body
 ```
@@ -174,7 +174,7 @@ $body = @{
 
 Invoke-RestMethod `
   -Method Post `
-  -Uri http://127.0.0.1:8080/v1/conversations/messages `
+  -Uri http://127.0.0.1:18088/v1/conversations/messages `
   -ContentType "application/json" `
   -Body $body
 ```
@@ -229,7 +229,7 @@ $body = @{
 
 Invoke-RestMethod `
   -Method Post `
-  -Uri http://127.0.0.1:8080/v1/images/generations `
+  -Uri http://127.0.0.1:18088/v1/images/generations `
   -ContentType "application/json" `
   -Body $body
 ```
@@ -239,6 +239,7 @@ Invoke-RestMethod `
 - The default Compose setup exposes the gateway to same-server containers as `http://llmhq:8080` by automatically connecting the `llmhq` container to user-defined Docker bridge networks.
 - The default Compose setup also publishes a host-local port as `http://127.0.0.1:18088`; it is bound to loopback and is not exposed to the LAN.
 - The default Compose setup publishes the admin WebUI on `http://<server-ip>:18089/admin` and adds the Unraid `net.unraid.docker.webui` label.
+- Runtime model aliases, provider profile directories, provider-native model arguments, default model, and fallback chains are stored in `./data/settings.json` by default and can be edited through the admin WebUI.
 - Claude and Codex workers use persistent profile directories under `./data/profiles/...`.
 - Stored conversations live under `./data/conversations`.
 - Run `npm run doctor` or `docker compose exec llmhq npm run doctor` to verify CLI availability.

@@ -25,9 +25,10 @@ export async function buildAdminApp({
 
   app.get("/admin/api/summary", async (_request, reply) => {
     try {
-      const [health, models] = await Promise.all([
+      const [health, models, settings] = await Promise.all([
         fetchJson(fetchImpl, apiBaseUrl, "/health"),
         fetchJson(fetchImpl, apiBaseUrl, "/v1/models"),
+        fetchJson(fetchImpl, apiBaseUrl, "/admin/settings"),
       ]);
 
       return reply.send({
@@ -36,12 +37,65 @@ export async function buildAdminApp({
         api_base_url: apiBaseUrl,
         health,
         models: Array.isArray(models?.data) ? models.data : [],
+        settings: settings?.settings || null,
+        editable: settings?.editable !== false,
       });
     } catch (error) {
       return reply.code(502).send({
         status: "error",
         error: {
           code: "llmhq_unreachable",
+          message: error instanceof Error ? error.message : String(error),
+        },
+      });
+    }
+  });
+
+  app.put("/admin/api/settings", async (request, reply) => {
+    try {
+      const saved = await fetchJson(fetchImpl, apiBaseUrl, "/admin/settings", {
+        method: "PUT",
+        body: request.body?.settings || request.body || {},
+      });
+      const health = await fetchJson(fetchImpl, apiBaseUrl, "/health");
+      return reply.send({
+        status: "ok",
+        fetched_at: new Date().toISOString(),
+        api_base_url: apiBaseUrl,
+        health,
+        models: Array.isArray(saved?.models) ? saved.models : [],
+        settings: saved?.settings || null,
+        editable: saved?.editable !== false,
+      });
+    } catch (error) {
+      return reply.code(502).send({
+        status: "error",
+        error: {
+          code: "llmhq_settings_save_failed",
+          message: error instanceof Error ? error.message : String(error),
+        },
+      });
+    }
+  });
+
+  app.post("/admin/api/settings/reload", async (_request, reply) => {
+    try {
+      const reloaded = await fetchJson(fetchImpl, apiBaseUrl, "/admin/settings/reload", { method: "POST" });
+      const health = await fetchJson(fetchImpl, apiBaseUrl, "/health");
+      return reply.send({
+        status: "ok",
+        fetched_at: new Date().toISOString(),
+        api_base_url: apiBaseUrl,
+        health,
+        models: Array.isArray(reloaded?.models) ? reloaded.models : [],
+        settings: reloaded?.settings || null,
+        editable: reloaded?.editable !== false,
+      });
+    } catch (error) {
+      return reply.code(502).send({
+        status: "error",
+        error: {
+          code: "llmhq_settings_reload_failed",
           message: error instanceof Error ? error.message : String(error),
         },
       });
@@ -55,10 +109,29 @@ function normalizeBaseUrl(value) {
   return String(value || DEFAULT_API_BASE_URL).replace(/\/+$/, "");
 }
 
-async function fetchJson(fetchImpl, baseUrl, pathname) {
-  const response = await fetchImpl(`${baseUrl}${pathname}`);
+async function fetchJson(fetchImpl, baseUrl, pathname, options = {}) {
+  const headers = {
+    accept: "application/json",
+    ...(options.headers || {}),
+  };
+  const init = {
+    method: options.method || "GET",
+    headers,
+  };
+  if (options.body !== undefined) {
+    init.headers["content-type"] = "application/json";
+    init.body = JSON.stringify(options.body);
+  }
+
+  const response = await fetchImpl(`${baseUrl}${pathname}`, init);
   if (!response.ok) {
-    throw new Error(`${pathname} returned ${response.status}`);
+    let details = null;
+    try {
+      details = await response.json();
+    } catch {
+      details = null;
+    }
+    throw new Error(details?.error?.message || `${pathname} returned ${response.status}`);
   }
   return response.json();
 }
@@ -260,6 +333,48 @@ function adminHtml({ apiBaseUrl }) {
       cursor: pointer;
     }
     button:hover { border-color: var(--blue); color: var(--blue); }
+    button.primary {
+      border-color: var(--blue);
+      background: var(--blue);
+      color: #ffffff;
+    }
+    button.primary:hover { color: #ffffff; filter: brightness(0.96); }
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+      justify-content: flex-end;
+    }
+    .settings-editor {
+      padding: 16px 18px 18px;
+      display: grid;
+      gap: 10px;
+    }
+    textarea {
+      width: 100%;
+      min-height: 420px;
+      resize: vertical;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      font-size: 12px;
+      line-height: 1.5;
+      color: var(--text);
+      background: #fbfcfe;
+    }
+    textarea:focus {
+      outline: 2px solid rgba(29, 78, 216, 0.18);
+      border-color: var(--blue);
+    }
+    .save-state {
+      min-height: 20px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .save-state.ok { color: var(--green); }
+    .save-state.bad { color: var(--red); }
     @media (max-width: 900px) {
       header { align-items: flex-start; flex-direction: column; padding: 16px; }
       main { padding: 16px; }
@@ -317,6 +432,7 @@ function adminHtml({ apiBaseUrl }) {
           <thead>
             <tr>
               <th>Alias</th>
+              <th>CLI model</th>
               <th>Capabilities</th>
               <th>Output</th>
               <th>Fallback</th>
@@ -324,6 +440,20 @@ function adminHtml({ apiBaseUrl }) {
           </thead>
           <tbody id="models-body"></tbody>
         </table>
+      </div>
+    </section>
+
+    <section class="wide">
+      <div class="section-head">
+        <h2>Runtime Settings</h2>
+        <div class="actions">
+          <button id="reload-settings" type="button">Reload</button>
+          <button id="save-settings" class="primary" type="button">Save Settings</button>
+        </div>
+      </div>
+      <div class="settings-editor">
+        <textarea id="settings-json" spellcheck="false" aria-label="LLMHQ runtime settings JSON"></textarea>
+        <div id="settings-state" class="save-state">Settings are loaded from the gateway.</div>
       </div>
     </section>
 
@@ -363,8 +493,19 @@ function adminHtml({ apiBaseUrl }) {
     const statusEl = document.getElementById("gateway-status");
     const errorEl = document.getElementById("error");
     const refreshEl = document.getElementById("refresh");
+    const saveSettingsEl = document.getElementById("save-settings");
+    const reloadSettingsEl = document.getElementById("reload-settings");
+    const settingsEditorEl = document.getElementById("settings-json");
+    const settingsStateEl = document.getElementById("settings-state");
+    let settingsDirty = false;
 
     refreshEl.addEventListener("click", loadSummary);
+    saveSettingsEl.addEventListener("click", saveSettings);
+    reloadSettingsEl.addEventListener("click", reloadSettings);
+    settingsEditorEl.addEventListener("input", () => {
+      settingsDirty = true;
+      setSettingsState("Unsaved settings edits.", "");
+    });
     loadSummary();
 
     async function loadSummary() {
@@ -377,6 +518,7 @@ function adminHtml({ apiBaseUrl }) {
           throw new Error(summary?.error?.message || "Admin summary failed");
         }
         renderSummary(summary);
+        renderSettings(summary.settings);
         setStatus("Online", "ok");
       } catch (error) {
         setStatus("Offline", "bad");
@@ -392,21 +534,81 @@ function adminHtml({ apiBaseUrl }) {
       document.getElementById("worker-count").textContent = providers.length;
       document.getElementById("model-count").textContent = models.length;
       document.getElementById("fetched-at").textContent = summary.fetched_at ? new Date(summary.fetched_at).toLocaleString() : "";
+      saveSettingsEl.disabled = summary.editable === false;
       renderModels(models);
       renderWorkers(providers);
+    }
+
+    function renderSettings(settings) {
+      if (!settings || settingsDirty) {
+        return;
+      }
+      settingsEditorEl.value = JSON.stringify(settings, null, 2);
+      setSettingsState("Settings are loaded from the gateway.", "");
+    }
+
+    async function saveSettings() {
+      let parsed;
+      try {
+        parsed = JSON.parse(settingsEditorEl.value || "{}");
+      } catch (error) {
+        setSettingsState("Invalid JSON: " + error.message, "bad");
+        return;
+      }
+
+      setSettingsState("Saving settings...", "");
+      saveSettingsEl.disabled = true;
+      try {
+        const response = await fetch("/admin/api/settings", {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ settings: parsed }),
+        });
+        const summary = await response.json();
+        if (!response.ok) {
+          throw new Error(summary?.error?.message || "Settings save failed");
+        }
+        settingsDirty = false;
+        renderSummary(summary);
+        renderSettings(summary.settings);
+        setSettingsState("Saved. LLMHQ runtime was updated.", "ok");
+        setStatus("Online", "ok");
+      } catch (error) {
+        setSettingsState(error.message || String(error), "bad");
+      } finally {
+        saveSettingsEl.disabled = false;
+      }
+    }
+
+    async function reloadSettings() {
+      settingsDirty = false;
+      setSettingsState("Reloading settings...", "");
+      try {
+        const response = await fetch("/admin/api/settings/reload", { method: "POST" });
+        const summary = await response.json();
+        if (!response.ok) {
+          throw new Error(summary?.error?.message || "Settings reload failed");
+        }
+        renderSummary(summary);
+        renderSettings(summary.settings);
+        setStatus("Online", "ok");
+      } catch (error) {
+        setSettingsState(error.message || String(error), "bad");
+      }
     }
 
     function renderModels(models) {
       const body = document.getElementById("models-body");
       body.innerHTML = "";
       if (!models.length) {
-        body.innerHTML = '<tr><td colspan="4" class="empty">No model aliases returned.</td></tr>';
+        body.innerHTML = '<tr><td colspan="5" class="empty">No model aliases returned.</td></tr>';
         return;
       }
       for (const model of models) {
         const fallback = Array.isArray(model.fallback) && model.fallback.length ? model.fallback : ["none"];
         body.append(row([
           code(model.id),
+          model.cli_model ? code(model.cli_model) : '<span class="hint">not set</span>',
           tokens(model.capabilities),
           tokens(model.output),
           fallback.map((item) => item === "none" ? '<span class="hint">none</span>' : code(item)).join(" ")
@@ -456,6 +658,11 @@ function adminHtml({ apiBaseUrl }) {
     function setStatus(text, kind) {
       statusEl.textContent = text;
       statusEl.className = "pill " + kind;
+    }
+
+    function setSettingsState(text, kind) {
+      settingsStateEl.textContent = text;
+      settingsStateEl.className = "save-state" + (kind ? " " + kind : "");
     }
 
     function escapeHtml(value) {

@@ -4,7 +4,7 @@
 
 LLMHQ is a private, same-server LLM gateway. Product apps call one local API instead of each app installing and managing separate Claude, Codex, ChatGPT, credentials, and wrapper code.
 
-The current implementation is a Fastify API container with persistent provider profiles, model aliases, explicit fallback, file-backed conversations, local asset storage, and an experimental ChatGPT browser worker for image generation.
+The current implementation is a Fastify API container with persistent provider profiles, editable runtime settings, model aliases, explicit fallback, file-backed conversations, local asset storage, an admin WebUI, and an experimental ChatGPT browser worker for image generation.
 
 ## Deployment Topology
 
@@ -20,9 +20,12 @@ flowchart LR
     subgraph DockerNet["Private Docker network: llmhq_private"]
       LLMHQ["LLMHQ API\nFastify on :8080"]
       Profiles["Persistent profiles\n/app/data/profiles"]
+      Settings["Runtime settings\n/app/data/settings.json"]
       Conversations["Conversation store\n/app/data/conversations"]
       Assets["Asset store\n/app/data/assets"]
     end
+
+    WebUI["Admin WebUI\n0.0.0.0:18089/admin"]
 
     subgraph Workers["Provider workers"]
       Claude["Claude CLI worker\nclaude-1"]
@@ -38,8 +41,10 @@ flowchart LR
   AppC -->|"HTTP http://llmhq:8080"| LLMHQ
 
   LLMHQ --> Profiles
+  LLMHQ --> Settings
   LLMHQ --> Conversations
   LLMHQ --> Assets
+  WebUI -->|"private HTTP http://llmhq:8080"| LLMHQ
   LLMHQ --> Claude
   LLMHQ --> Codex
   LLMHQ --> ChatGPT
@@ -59,7 +64,7 @@ sequenceDiagram
   App->>API: POST /v1/conversations/messages
   API->>Store: get or create by project_id + conversation_key
   Store-->>API: prior messages
-  API->>Registry: resolve requested model
+  API->>Registry: resolve requested model from live settings
   Registry-->>API: model + fallback chain
   API->>Worker: generateChat(messages, model)
   alt worker succeeds
@@ -95,11 +100,26 @@ flowchart TD
 
 Apps select the model explicitly. If a selected model fails, LLMHQ reports the failure in `attempts` and then uses the configured default fallback unless the request disables fallback with `fallback: "none"` or `fallback: false`.
 
+Runtime model settings are stored in `LLMHQ_SETTINGS_FILE`, defaulting to `./data/settings.json`. The admin WebUI can edit:
+
+- default chat model
+- Claude and Codex worker profile directories
+- model aliases
+- provider-native CLI model names
+- model capabilities metadata
+- default fallback chains
+
+Saving settings validates the JSON, writes it to disk, rebuilds the in-memory registry, and applies the new routing behavior to subsequent calls without restarting LLMHQ.
+
 ## API Surface
 
 | Endpoint | Purpose |
 | --- | --- |
 | `GET /health` | Gateway and provider health. |
+| `GET /admin` | Admin WebUI. |
+| `GET /admin/settings` | Live runtime settings and rebuilt model list. |
+| `PUT /admin/settings` | Validate, persist, and apply runtime settings. |
+| `POST /admin/settings/reload` | Reload settings from disk and rebuild the registry. |
 | `GET /v1/models` | Model aliases, capabilities, outputs, and fallback chains. |
 | `POST /v1/chat/completions` | Stateless OpenAI-style chat call. |
 | `POST /v1/conversations` | Create or resolve a project conversation. |
@@ -131,6 +151,12 @@ LLMHQ_AUTH_MODE=none
 ```
 
 That is acceptable only when LLMHQ is bound to `127.0.0.1` and/or available only on a private Docker network. If LLMHQ is exposed beyond the local host or private Docker network, enable bearer keys with `LLMHQ_API_KEYS`.
+
+Default app URLs:
+
+- Product containers on the same Unraid server: `http://llmhq:8080`
+- Host-native apps on the Unraid server: `http://127.0.0.1:18088`
+- Browser/admin access from LAN: `http://<server-ip>:18089/admin`
 
 ## Provider Profiles
 

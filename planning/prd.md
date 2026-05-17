@@ -182,7 +182,7 @@ Health must report configured providers and profile paths without exposing secre
 
 Default Compose behavior:
 
-- Bind host API to `127.0.0.1:8080`.
+- Bind the host-local API to `127.0.0.1:18088` in the default Compose deployment.
 - Attach the service to private Docker network `llmhq_private`.
 - Let same-network product containers use `http://llmhq:8080`.
 - Expose noVNC login helper only on `127.0.0.1:7900`.
@@ -206,7 +206,7 @@ Default Compose behavior:
 ## Performance Requirements
 
 - Product apps should use the Docker service name `http://llmhq:8080` when on the same Docker network.
-- Host apps should use `http://127.0.0.1:8080`.
+- Host apps should use `http://127.0.0.1:18088`.
 - LLMHQ should avoid heavy app-side proxy logic. Apps should send one local HTTP request and let LLMHQ manage routing.
 
 ## Acceptance Criteria
