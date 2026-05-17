@@ -64,7 +64,7 @@ jobs:
           rm -rf "${source_next}"
           mkdir -p "${source_next}"
           tar -xzf "/tmp/llmhq-${GITHUB_SHA}.tgz" -C "${source_next}"
-          docker rm -f llmhq-network-sync >/dev/null 2>&1 || true
+          docker rm -f llmhq-network-sync llmhq-webui >/dev/null 2>&1 || true
           if [ -f "${base}/source/compose.yaml" ]; then
             LLMHQ_DATA_DIR="${base}/data" docker compose -p llmhq -f "${base}/source/compose.yaml" stop network-sync >/dev/null 2>&1 || true
             LLMHQ_DATA_DIR="${base}/data" docker compose -p llmhq -f "${base}/source/compose.yaml" rm -f network-sync >/dev/null 2>&1 || true
@@ -73,12 +73,14 @@ jobs:
           mv "${source_next}" "${base}/source"
 
           docker network create llmhq_private >/dev/null 2>&1 || true
-          LLMHQ_DATA_DIR="${base}/data" docker compose -p llmhq -f "${base}/source/compose.yaml" up -d --build llmhq network-sync
+          LLMHQ_DATA_DIR="${base}/data" docker compose -p llmhq -f "${base}/source/compose.yaml" up -d --build llmhq webui network-sync
           host_port="${LLMHQ_HOST_PORT:-18088}"
+          webui_port="${LLMHQ_WEBUI_PORT:-18089}"
           host_probe_image="$(docker inspect -f '{{.Config.Image}}' llmhq)"
           for attempt in $(seq 1 30); do
             if docker exec llmhq node -e "fetch('http://127.0.0.1:8080/v1/models').then((r) => { if (!r.ok) process.exit(1); return r.text(); }).then((body) => console.log(body.slice(0, 500))).catch(() => process.exit(1))" \
               && docker run --rm --network host --entrypoint node "${host_probe_image}" -e "fetch('http://127.0.0.1:${host_port}/v1/models').then((r) => { if (!r.ok) process.exit(1); return r.text(); }).then((body) => console.log(body.slice(0, 500))).catch(() => process.exit(1))" \
+              && docker run --rm --network host --entrypoint node "${host_probe_image}" -e "fetch('http://127.0.0.1:${webui_port}/admin').then((r) => { if (!r.ok) process.exit(1); return r.text(); }).then((body) => { if (!body.includes('LLMHQ Admin')) process.exit(1); console.log(body.slice(0, 120)); }).catch(() => process.exit(1))" \
               && docker inspect -f '{{.State.Running}}' llmhq-network-sync | grep -q true; then
               echo "${GITHUB_SHA}" > "${base}/current.sha"
               exit 0

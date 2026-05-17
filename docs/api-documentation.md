@@ -12,9 +12,9 @@ Current provider workers:
 
 Current server defaults:
 
-- Host URL from the Windows/server host: `http://127.0.0.1:8080`
-- Docker-to-Docker URL on the private network: `http://llmhq:8080`
-- Compose network: `llmhq_private`
+- Host URL from the server host: `http://127.0.0.1:18088`
+- Docker-to-Docker URL on same-server app networks: `http://llmhq:8080`
+- Unraid/admin WebUI: `http://<server-ip>:18089/admin`
 - Default chat model: `claude-sonnet`
 - Same-server auth mode in Compose: `LLMHQ_AUTH_MODE=none`
 
@@ -24,12 +24,18 @@ Use one of these values in product apps:
 
 ```env
 # Host-local apps
-LLMHQ_BASE_URL=http://127.0.0.1:8080
+LLMHQ_BASE_URL=http://127.0.0.1:18088
 ```
 
 ```env
-# Apps running as containers on the same Docker network
+# Apps running as containers on the same server
 LLMHQ_BASE_URL=http://llmhq:8080
+```
+
+The Compose deployment also sets the Unraid WebUI label:
+
+```yaml
+net.unraid.docker.webui: "http://[IP]:[PORT:18089]/admin"
 ```
 
 ## Authentication
@@ -225,6 +231,16 @@ Notes:
 
 - This endpoint does not prove the provider is logged in. It reports configured worker health.
 - A provider may still fail during a generation call if its subscription, session, or provider UI is unavailable.
+
+### `GET /admin`
+
+Serves the read-only admin WebUI. The page loads gateway status from the companion admin service at:
+
+```http
+GET /admin/api/summary
+```
+
+The current UI shows configured provider accounts, model aliases, and fallback chains. It does not yet edit accounts, model aliases, or fallback policies.
 
 ### `GET /v1/models`
 
@@ -877,11 +893,13 @@ Use this when the app does not want to own LLM chat history.
 
 ### Same-Server Docker App
 
-Add the app container to the `llmhq_private` Docker network and configure:
+Configure:
 
 ```env
 LLMHQ_BASE_URL=http://llmhq:8080
 ```
+
+The `llmhq-network-sync` sidecar automatically connects LLMHQ to user-defined Docker bridge networks on the server.
 
 No bearer token is required if LLMHQ is running with `LLMHQ_AUTH_MODE=none`.
 

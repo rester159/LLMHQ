@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import Fastify from "fastify";
+import { buildAdminApp } from "../src/adminServer.js";
 import { buildApp } from "../src/app.js";
 import { AssetStore } from "../src/assets.js";
 import { FakeChatWorker } from "../src/providers/fakeChatWorker.js";
@@ -651,3 +652,61 @@ test("conversation list can filter by project", async () => {
   assert.equal(response.json().data.length, 1);
   assert.equal(response.json().data[0].project_id, "one");
 });
+
+test("admin webui renders and summarizes gateway state", async () => {
+  const fetchImpl = async (url) => {
+    if (String(url).endsWith("/health")) {
+      return jsonResponse({
+        status: "ok",
+        auth_mode: "none",
+        providers: [
+          {
+            id: "claude-1",
+            status: "configured",
+            command: "claude",
+            capabilities: ["chat", "vision"],
+            profileDir: "/app/data/profiles/claude-1",
+          },
+        ],
+      });
+    }
+    if (String(url).endsWith("/v1/models")) {
+      return jsonResponse({
+        object: "list",
+        data: [
+          {
+            id: "claude-haiku",
+            capabilities: ["chat", "fast"],
+            output: ["text"],
+            fallback: ["claude-sonnet", "codex-gpt-5.5"],
+          },
+        ],
+      });
+    }
+    return { ok: false, status: 404, json: async () => ({}) };
+  };
+
+  const app = await buildAdminApp({
+    fastify: Fastify(),
+    llmhqBaseUrl: "http://llmhq:8080",
+    fetchImpl,
+  });
+
+  const page = await app.inject({ method: "GET", url: "/admin" });
+  assert.equal(page.statusCode, 200);
+  assert.match(page.headers["content-type"], /text\/html/);
+  assert.match(page.body, /LLMHQ Admin/);
+
+  const summary = await app.inject({ method: "GET", url: "/admin/api/summary" });
+  assert.equal(summary.statusCode, 200);
+  assert.equal(summary.json().health.providers[0].id, "claude-1");
+  assert.equal(summary.json().models[0].id, "claude-haiku");
+});
+
+function jsonResponse(payload) {
+  return {
+    ok: true,
+    status: 200,
+    json: async () => payload,
+  };
+}
