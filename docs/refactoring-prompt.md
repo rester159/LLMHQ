@@ -16,10 +16,11 @@ Goal:
 
 LLMHQ connection:
 - Add env var LLMHQ_BASE_URL.
-- Default for host-local apps: http://127.0.0.1:8080
-- Default for Docker containers on the same llmhq_private network: http://llmhq:8080
+- Default for host-local apps running directly on the LLMHQ server: http://127.0.0.1:18088
+- Default for Docker containers on the same server: http://llmhq:8080
 - If LLMHQ_API_KEY is present, send Authorization: Bearer ${LLMHQ_API_KEY}.
 - If LLMHQ_API_KEY is absent, call without Authorization because same-server LLMHQ may run with LLMHQ_AUTH_MODE=none.
+- Do not use 127.0.0.1 from inside a product app container; that points to the product app container itself, not LLMHQ.
 
 Default model behavior:
 - Add env var LLMHQ_DEFAULT_MODEL.
@@ -156,4 +157,3 @@ async function sendConversationMessage(input: {
   attempts: unknown[];
 }>;
 ```
-

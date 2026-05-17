@@ -28,6 +28,7 @@ export function loadConfig(env = process.env) {
     apiKeys,
     assetDir: path.resolve(rootDir, mergedEnv.LLMHQ_ASSET_DIR || "./data/assets"),
     conversationDir: path.resolve(rootDir, mergedEnv.LLMHQ_CONVERSATION_DIR || "./data/conversations"),
+    settingsFile: path.resolve(rootDir, mergedEnv.LLMHQ_SETTINGS_FILE || "./data/settings.json"),
     chat: {
       defaultModel: mergedEnv.LLMHQ_DEFAULT_CHAT_MODEL || "claude-sonnet",
       timeoutMs: intFromEnv(mergedEnv.LLMHQ_CHAT_TIMEOUT_MS, 180000),

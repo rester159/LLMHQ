@@ -12,6 +12,7 @@ import { ChatGptImageBrowserWorker } from "./providers/chatgptImageBrowserWorker
 import { FakeChatWorker } from "./providers/fakeChatWorker.js";
 import { FakeImageWorker } from "./providers/fakeImageWorker.js";
 import { createModelRegistry } from "./registry.js";
+import { defaultRuntimeSettings, SettingsStore } from "./settingsStore.js";
 
 export async function buildApp({
   fastify,
@@ -19,29 +20,24 @@ export async function buildApp({
   registry = null,
   assetStore = null,
   conversationStore = null,
+  settingsStore = null,
 } = {}) {
   const app = fastify || (await import("fastify")).default({ logger: true });
   const store = assetStore || new AssetStore(config.assetDir);
   const conversations = conversationStore || new ConversationStore(config.conversationDir);
-  const activeRegistry =
-    registry ||
-    createModelRegistry({
-      chatgptWorker: config.chatgpt.enabled ? new ChatGptImageBrowserWorker(config.chatgpt) : null,
-      fakeWorker: new FakeImageWorker(),
-      enableFake: process.env.NODE_ENV === "test",
-      claude: config.claude,
-      codex: config.codex,
-      fakeChatModels:
-        process.env.NODE_ENV === "test"
-          ? [
-              {
-                id: "fake-chat",
-                workers: [new FakeChatWorker({ id: "fake-chat", response: "fake response" })],
-                fallback: [],
-              },
-            ]
-          : null,
+  const runtimeSettingsStore =
+    settingsStore ||
+    new SettingsStore({
+      filePath: config.settingsFile,
+      defaultSettings: () => defaultRuntimeSettings(config),
     });
+  const runtime = {
+    settingsStore: runtimeSettingsStore,
+    settings: registry ? null : await runtimeSettingsStore.load(),
+    registry: null,
+    editable: !registry,
+  };
+  runtime.registry = registry || createRuntimeRegistry(config, runtime.settings);
 
   app.addHook("preHandler", authenticateRequest({ apiKeys: config.apiKeys, authMode: config.authMode }));
 
@@ -49,21 +45,75 @@ export async function buildApp({
     return {
       status: "ok",
       auth_mode: config.authMode,
-      providers: await activeRegistry.health(),
+      providers: await runtime.registry.health(),
     };
   });
 
   app.get("/v1/models", async () => {
     return {
       object: "list",
-      data: [...activeRegistry.models.values()].map((model) => ({
-        id: model.id,
-        object: "model",
-        capabilities: model.capabilities,
-        output: model.output,
-        fallback: model.fallback,
-      })),
+      data: serializeModels(runtime.registry),
     };
+  });
+
+  app.get("/admin/settings", async () => {
+    return {
+      status: "ok",
+      editable: runtime.editable,
+      settings: runtime.settings,
+      models: serializeModels(runtime.registry),
+    };
+  });
+
+  app.put("/admin/settings", async (request, reply) => {
+    if (!runtime.editable) {
+      return reply.code(409).send({
+        error: {
+          code: "settings_not_editable",
+          message: "Runtime settings cannot be changed when an explicit registry is injected.",
+        },
+      });
+    }
+
+    try {
+      const nextSettings = await runtime.settingsStore.save(request.body?.settings || request.body || {});
+      const nextRegistry = createRuntimeRegistry(config, nextSettings);
+      runtime.settings = nextSettings;
+      runtime.registry = nextRegistry;
+      return reply.send({
+        status: "ok",
+        editable: runtime.editable,
+        settings: runtime.settings,
+        models: serializeModels(runtime.registry),
+      });
+    } catch (error) {
+      return sendProviderError(reply, error);
+    }
+  });
+
+  app.post("/admin/settings/reload", async (_request, reply) => {
+    if (!runtime.editable) {
+      return reply.code(409).send({
+        error: {
+          code: "settings_not_editable",
+          message: "Runtime settings cannot be changed when an explicit registry is injected.",
+        },
+      });
+    }
+
+    try {
+      const nextSettings = await runtime.settingsStore.load();
+      runtime.settings = nextSettings;
+      runtime.registry = createRuntimeRegistry(config, nextSettings);
+      return reply.send({
+        status: "ok",
+        editable: runtime.editable,
+        settings: runtime.settings,
+        models: serializeModels(runtime.registry),
+      });
+    } catch (error) {
+      return sendProviderError(reply, error);
+    }
   });
 
   app.post("/v1/chat/completions", async (request, reply) => {
@@ -73,11 +123,25 @@ export async function buildApp({
       if (body.stream) {
         return sendLiveChatCompletionStream(reply, {
           emitStatusEvents: Boolean(body.status_events),
-          run: (onStatus) => runChatCompletion({ activeRegistry, config, body, messages: body.messages, onStatus }),
+          run: (onStatus) =>
+            runChatCompletion({
+              activeRegistry: runtime.registry,
+              config,
+              body,
+              messages: body.messages,
+              onStatus,
+              defaultChatModel: getDefaultChatModel(runtime, config),
+            }),
         });
       }
 
-      const response = await runChatCompletion({ activeRegistry, config, body, messages: body.messages });
+      const response = await runChatCompletion({
+        activeRegistry: runtime.registry,
+        config,
+        body,
+        messages: body.messages,
+        defaultChatModel: getDefaultChatModel(runtime, config),
+      });
       return reply.send(response);
     } catch (error) {
       return sendProviderError(reply, error);
@@ -134,22 +198,24 @@ export async function buildApp({
           emitStatusEvents: Boolean(body.status_events),
           run: (onStatus) =>
             runConversationTurn({
-              activeRegistry,
+              activeRegistry: runtime.registry,
               config,
               conversations,
               conversation,
               body,
               onStatus,
+              defaultChatModel: getDefaultChatModel(runtime, config),
             }),
           extractCompletion: (result) => result.chat_completion,
         });
       }
       const result = await runConversationTurn({
-        activeRegistry,
+        activeRegistry: runtime.registry,
         config,
         conversations,
         conversation,
         body,
+        defaultChatModel: getDefaultChatModel(runtime, config),
       });
       return reply.send(result);
     } catch (error) {
@@ -174,22 +240,24 @@ export async function buildApp({
           emitStatusEvents: Boolean(body.status_events),
           run: (onStatus) =>
             runConversationTurn({
-              activeRegistry,
+              activeRegistry: runtime.registry,
               config,
               conversations,
               conversation,
               body,
               onStatus,
+              defaultChatModel: getDefaultChatModel(runtime, config),
             }),
           extractCompletion: (result) => result.chat_completion,
         });
       }
       const result = await runConversationTurn({
-        activeRegistry,
+        activeRegistry: runtime.registry,
         config,
         conversations,
         conversation,
         body,
+        defaultChatModel: getDefaultChatModel(runtime, config),
       });
       return reply.send(result);
     } catch (error) {
@@ -204,6 +272,7 @@ export async function buildApp({
     const attempts = [];
 
     try {
+      const activeRegistry = runtime.registry;
       const initialModel = activeRegistry.get(modelId);
       const result = await tryModelWithFallbacks(activeRegistry, initialModel, {
         method: "generateImage",
@@ -269,12 +338,57 @@ export async function buildApp({
   return app;
 }
 
-async function runConversationTurn({ activeRegistry, config, conversations, conversation, body, onStatus }) {
+function createRuntimeRegistry(config, settings) {
+  return createModelRegistry({
+    chatgptWorker: config.chatgpt?.enabled ? new ChatGptImageBrowserWorker(config.chatgpt) : null,
+    fakeWorker: new FakeImageWorker(),
+    enableFake: process.env.NODE_ENV === "test",
+    claude: config.claude,
+    codex: config.codex,
+    settings,
+    fakeChatModels:
+      process.env.NODE_ENV === "test"
+        ? [
+            {
+              id: "fake-chat",
+              workers: [new FakeChatWorker({ id: "fake-chat", response: "fake response" })],
+              fallback: [],
+            },
+          ]
+        : null,
+  });
+}
+
+function serializeModels(registry) {
+  return [...registry.models.values()].map((model) => ({
+    id: model.id,
+    object: "model",
+    capabilities: model.capabilities,
+    output: model.output,
+    fallback: model.fallback,
+    provider: model.provider || null,
+    cli_model: model.cliModel || null,
+  }));
+}
+
+function getDefaultChatModel(runtime, config) {
+  return runtime.settings?.defaultModel || config.chat?.defaultModel || runtime.registry.defaultModel("chat");
+}
+
+async function runConversationTurn({
+  activeRegistry,
+  config,
+  conversations,
+  conversation,
+  body,
+  onStatus,
+  defaultChatModel,
+}) {
   const inputMessages = extractConversationInputMessages(body);
   const context = extractConversationContext(body);
   const conversationWithContext =
     context === undefined ? conversation : await conversations.updateContext(conversation.id, context);
-  const model = body.model || conversation.default_model || config.chat?.defaultModel || activeRegistry.defaultModel("chat");
+  const model = body.model || conversation.default_model || defaultChatModel || config.chat?.defaultModel || activeRegistry.defaultModel("chat");
   const contextMessages = conversationContextMessages(
     conversationWithContext,
     inputMessages,
@@ -290,6 +404,7 @@ async function runConversationTurn({ activeRegistry, config, conversations, conv
     },
     messages: contextMessages,
     onStatus,
+    defaultChatModel,
   });
   const updated = await conversations.appendTurn(conversationWithContext.id, {
     inputMessages,
@@ -310,8 +425,8 @@ async function runConversationTurn({ activeRegistry, config, conversations, conv
   };
 }
 
-async function runChatCompletion({ activeRegistry, config, body, messages, onStatus }) {
-  const requestedModel = body.model || config.chat?.defaultModel || activeRegistry.defaultModel("chat");
+async function runChatCompletion({ activeRegistry, config, body, messages, onStatus, defaultChatModel }) {
+  const requestedModel = body.model || defaultChatModel || config.chat?.defaultModel || activeRegistry.defaultModel("chat");
   const attempts = [];
   const statusEvents = [];
   const emitStatus = createStatusEmitter((event) => {
