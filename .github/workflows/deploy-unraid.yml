@@ -64,6 +64,10 @@ jobs:
           rm -rf "${source_next}"
           mkdir -p "${source_next}"
           tar -xzf "/tmp/llmhq-${GITHUB_SHA}.tgz" -C "${source_next}"
+          if [ -f "${base}/source/compose.yaml" ]; then
+            LLMHQ_DATA_DIR="${base}/data" docker compose -p llmhq -f "${base}/source/compose.yaml" stop network-sync >/dev/null 2>&1 || true
+            LLMHQ_DATA_DIR="${base}/data" docker compose -p llmhq -f "${base}/source/compose.yaml" rm -f network-sync >/dev/null 2>&1 || true
+          fi
           rm -rf "${base}/source"
           mv "${source_next}" "${base}/source"
 
