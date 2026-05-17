@@ -44,6 +44,7 @@ export function createModelRegistry({
         workers: model.workers,
         fallback: model.fallback || [],
         kind: "chat",
+        provider: model.provider || null,
         cliModel: model.cliModel || model.id,
       });
     }
@@ -118,7 +119,18 @@ export function createModelRegistry({
             continue;
           }
           seen.add(worker.id);
-          providers.push(await worker.health());
+          const health = await worker.health();
+          if (worker.unavailableUntil && worker.unavailableUntil > Date.now()) {
+            providers.push({
+              ...health,
+              status: "unavailable",
+              lastFailureCode: worker.lastFailureCode || null,
+              lastFailureAt: worker.lastFailureAt || null,
+              retryAt: new Date(worker.unavailableUntil).toISOString(),
+            });
+          } else {
+            providers.push(health);
+          }
         }
       }
       return providers;

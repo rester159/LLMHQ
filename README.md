@@ -240,6 +240,8 @@ Invoke-RestMethod `
 - The default Compose setup also publishes a host-local port as `http://127.0.0.1:18088`; it is bound to loopback and is not exposed to the LAN.
 - The default Compose setup publishes the admin WebUI on `http://<server-ip>:18089/admin` and adds the Unraid `net.unraid.docker.webui` label.
 - Runtime model aliases, provider profile directories, provider-native model arguments, default model, and fallback chains are stored in `./data/settings.json` by default and can be edited through the admin WebUI.
+- The admin WebUI includes a Provider Probe button that sends a minimal request per provider and exposes `auth_required` as an LLMHQ/provider-session problem before product apps hit it.
+- If a provider worker fails with sticky state such as `auth_required`, LLMHQ marks that worker unavailable briefly and skips other aliases using the same worker so fallback can reach a different provider faster.
 - Claude and Codex workers use persistent profile directories under `./data/profiles/...`.
 - Stored conversations live under `./data/conversations`.
 - Run `npm run doctor` or `docker compose exec llmhq npm run doctor` to verify CLI availability.

@@ -33,6 +33,7 @@ export function loadConfig(env = process.env) {
       defaultModel: mergedEnv.LLMHQ_DEFAULT_CHAT_MODEL || "claude-sonnet",
       timeoutMs: intFromEnv(mergedEnv.LLMHQ_CHAT_TIMEOUT_MS, 180000),
       maxConversationMessages: intFromEnv(mergedEnv.LLMHQ_MAX_CONVERSATION_MESSAGES, 60),
+      workerFailureCooldownMs: intFromEnv(mergedEnv.LLMHQ_WORKER_FAILURE_COOLDOWN_MS, 30000),
     },
     claude: {
       enabled: boolFromEnv(mergedEnv.LLMHQ_CLAUDE_ENABLED, false),

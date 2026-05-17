@@ -182,6 +182,8 @@ Failed attempt:
 
 Apps should log these records when debugging provider availability. A response with `fallback_used: true` is still a successful response.
 
+When a worker fails with sticky provider state such as `auth_required`, `rate_limited`, `worker_spawn_failed`, or `worker_timeout`, LLMHQ marks that worker unavailable for `LLMHQ_WORKER_FAILURE_COOLDOWN_MS`. During that cooldown, other model aliases that use the same worker are skipped so fallback can reach a different provider instead of repeatedly hitting the same dead session.
+
 ## Endpoints
 
 ### `GET /health`
@@ -328,6 +330,52 @@ Request:
 ```http
 POST /admin/settings/reload
 ```
+
+### `POST /admin/provider-probe`
+
+Runs one minimal chat request per configured chat provider by default. Use this to verify that provider profiles are actually usable, not merely configured.
+
+Request:
+
+```http
+POST /admin/provider-probe
+Content-Type: application/json
+```
+
+Optional body:
+
+```json
+{
+  "models": ["claude-haiku", "codex-gpt-5.5"]
+}
+```
+
+Example degraded response:
+
+```json
+{
+  "status": "degraded",
+  "results": [
+    {
+      "model": "claude-haiku",
+      "ok": false,
+      "elapsed_ms": 1200,
+      "code": "auth_required",
+      "message": "Provider CLI is not authenticated.",
+      "attempts": [
+        {
+          "model": "claude-haiku",
+          "worker": "claude-1",
+          "status": "failed",
+          "code": "auth_required"
+        }
+      ]
+    }
+  ]
+}
+```
+
+The admin WebUI exposes this as the Provider Probe button.
 
 ### `GET /v1/models`
 
@@ -941,6 +989,7 @@ Log in interactively with Google in the remote browser, then press Enter in the 
 | `LLMHQ_DEFAULT_CHAT_MODEL` | `claude-sonnet` | Default chat model. |
 | `LLMHQ_CHAT_TIMEOUT_MS` | `180000` | Default provider timeout. |
 | `LLMHQ_MAX_CONVERSATION_MESSAGES` | `60` | Stateful context window in messages. |
+| `LLMHQ_WORKER_FAILURE_COOLDOWN_MS` | `30000` | How long to skip a worker after sticky failures such as `auth_required` or `rate_limited`. |
 | `LLMHQ_CLAUDE_ENABLED` | `false` | Enables Claude CLI models. |
 | `LLMHQ_CLAUDE_COMMAND` | `claude` | Claude CLI command. |
 | `LLMHQ_CLAUDE_WORKERS` | empty | Comma-separated worker specs like `claude-1=./data/profiles/claude-1`. |
@@ -1002,6 +1051,8 @@ Use this decision table before changing payload code:
 | Connection refused to `10.0.5.202:18088` from another machine | The host API port is loopback-only by design. | Use the WebUI on `http://10.0.5.202:18089/admin` from a browser; apps on the Unraid host use `http://127.0.0.1:18088`. |
 | `invalid_request` | The JSON body does not match the endpoint contract. | Keep OpenAI-style `messages`, `model`, `fallback`, and `stream` fields for `/v1/chat/completions`. |
 | `auth_required` with an `attempts` entry | The request reached LLMHQ and selected a provider worker, but the provider CLI account is not authenticated or usable. | Re-login or fix the provider account in LLMHQ; the calling app should not change payload shape. |
+
+If a later fallback attempt shows `status: "skipped"`, LLMHQ intentionally skipped the same worker because it had already failed with sticky provider state in that request or cooldown window.
 
 ## Minimal Client Behavior
 

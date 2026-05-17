@@ -102,6 +102,33 @@ export async function buildAdminApp({
     }
   });
 
+  app.post("/admin/api/provider-probe", async (request, reply) => {
+    try {
+      const probe = await fetchJson(fetchImpl, apiBaseUrl, "/admin/provider-probe", {
+        method: "POST",
+        body: request.body || {},
+      });
+      const health = await fetchJson(fetchImpl, apiBaseUrl, "/health");
+      const models = await fetchJson(fetchImpl, apiBaseUrl, "/v1/models");
+      return reply.send({
+        status: probe.status || "ok",
+        fetched_at: new Date().toISOString(),
+        api_base_url: apiBaseUrl,
+        health,
+        models: Array.isArray(models?.data) ? models.data : [],
+        results: Array.isArray(probe?.results) ? probe.results : [],
+      });
+    } catch (error) {
+      return reply.code(502).send({
+        status: "error",
+        error: {
+          code: "llmhq_provider_probe_failed",
+          message: error instanceof Error ? error.message : String(error),
+        },
+      });
+    }
+  });
+
   return app;
 }
 
@@ -447,6 +474,7 @@ function adminHtml({ apiBaseUrl }) {
       <div class="section-head">
         <h2>Runtime Settings</h2>
         <div class="actions">
+          <button id="probe-providers" type="button">Probe Providers</button>
           <button id="reload-settings" type="button">Reload</button>
           <button id="save-settings" class="primary" type="button">Save Settings</button>
         </div>
@@ -454,6 +482,29 @@ function adminHtml({ apiBaseUrl }) {
       <div class="settings-editor">
         <textarea id="settings-json" spellcheck="false" aria-label="LLMHQ runtime settings JSON"></textarea>
         <div id="settings-state" class="save-state">Settings are loaded from the gateway.</div>
+      </div>
+    </section>
+
+    <section class="wide">
+      <div class="section-head">
+        <h2>Provider Probe</h2>
+        <span class="hint">One minimal request per provider</span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Model</th>
+              <th>Status</th>
+              <th>Worker</th>
+              <th>Elapsed</th>
+              <th>Attempts</th>
+            </tr>
+          </thead>
+          <tbody id="probe-body">
+            <tr><td colspan="5" class="empty">Run provider probe to verify login usability.</td></tr>
+          </tbody>
+        </table>
       </div>
     </section>
 
@@ -495,6 +546,7 @@ function adminHtml({ apiBaseUrl }) {
     const refreshEl = document.getElementById("refresh");
     const saveSettingsEl = document.getElementById("save-settings");
     const reloadSettingsEl = document.getElementById("reload-settings");
+    const probeProvidersEl = document.getElementById("probe-providers");
     const settingsEditorEl = document.getElementById("settings-json");
     const settingsStateEl = document.getElementById("settings-state");
     let settingsDirty = false;
@@ -502,6 +554,7 @@ function adminHtml({ apiBaseUrl }) {
     refreshEl.addEventListener("click", loadSummary);
     saveSettingsEl.addEventListener("click", saveSettings);
     reloadSettingsEl.addEventListener("click", reloadSettings);
+    probeProvidersEl.addEventListener("click", probeProviders);
     settingsEditorEl.addEventListener("input", () => {
       settingsDirty = true;
       setSettingsState("Unsaved settings edits.", "");
@@ -597,6 +650,32 @@ function adminHtml({ apiBaseUrl }) {
       }
     }
 
+    async function probeProviders() {
+      setSettingsState("Probing providers...", "");
+      probeProvidersEl.disabled = true;
+      try {
+        const response = await fetch("/admin/api/provider-probe", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({}),
+        });
+        const result = await response.json();
+        if (!response.ok) {
+          throw new Error(result?.error?.message || "Provider probe failed");
+        }
+        renderWorkers(Array.isArray(result.health?.providers) ? result.health.providers : []);
+        renderProbe(result.results || []);
+        setSettingsState(
+          result.status === "ok" ? "Provider probe passed." : "Provider probe found unavailable provider sessions.",
+          result.status === "ok" ? "ok" : "bad",
+        );
+      } catch (error) {
+        setSettingsState(error.message || String(error), "bad");
+      } finally {
+        probeProvidersEl.disabled = false;
+      }
+    }
+
     function renderModels(models) {
       const body = document.getElementById("models-body");
       body.innerHTML = "";
@@ -634,6 +713,25 @@ function adminHtml({ apiBaseUrl }) {
       }
     }
 
+    function renderProbe(results) {
+      const body = document.getElementById("probe-body");
+      body.innerHTML = "";
+      if (!Array.isArray(results) || !results.length) {
+        body.innerHTML = '<tr><td colspan="5" class="empty">No probe results returned.</td></tr>';
+        return;
+      }
+      for (const result of results) {
+        const attempts = Array.isArray(result.attempts) ? result.attempts : [];
+        body.append(row([
+          code(result.model),
+          result.ok ? '<span class="pill ok">ok</span>' : '<span class="pill bad">' + escapeHtml(result.code || "failed") + '</span>',
+          result.used_worker ? code(result.used_worker) : '<span class="hint">none</span>',
+          typeof result.elapsed_ms === "number" ? escapeHtml(String(result.elapsed_ms)) + " ms" : '<span class="hint">unknown</span>',
+          attempts.length ? code(JSON.stringify(attempts)) : '<span class="hint">none</span>'
+        ]));
+      }
+    }
+
     function row(cells) {
       const tr = document.createElement("tr");
       tr.innerHTML = cells.map((cell) => "<td>" + cell + "</td>").join("");
@@ -651,7 +749,7 @@ function adminHtml({ apiBaseUrl }) {
 
     function statusBadge(value) {
       const normalized = String(value || "unknown");
-      const kind = normalized === "configured" || normalized === "ready" ? "ok" : normalized === "unhealthy" ? "bad" : "warn";
+      const kind = normalized === "configured" || normalized === "ready" ? "ok" : normalized === "unhealthy" || normalized === "unavailable" ? "bad" : "warn";
       return '<span class="pill ' + kind + '">' + escapeHtml(normalized) + '</span>';
     }
 
