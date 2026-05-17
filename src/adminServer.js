@@ -534,6 +534,20 @@ function adminHtml({ apiBaseUrl }) {
 
     <section class="wide">
       <div class="section-head">
+        <h2>Provider Login</h2>
+        <div class="actions">
+          <button id="start-codex-login" type="button">Start Codex Device Login</button>
+          <button id="probe-providers-top" type="button">Probe Providers</button>
+        </div>
+      </div>
+      <div class="tool-panel">
+        <div id="provider-login-state" class="action-state">Codex login runs inside the LLMHQ container and prints a device-code URL here.</div>
+        <pre id="provider-login-log" class="log-output">No provider login session started.</pre>
+      </div>
+    </section>
+
+    <section class="wide">
+      <div class="section-head">
         <h2>Runtime Settings</h2>
         <div class="actions">
           <button id="probe-providers" type="button">Probe Providers</button>
@@ -544,20 +558,6 @@ function adminHtml({ apiBaseUrl }) {
       <div class="settings-editor">
         <textarea id="settings-json" spellcheck="false" aria-label="LLMHQ runtime settings JSON"></textarea>
         <div id="settings-state" class="save-state">Settings are loaded from the gateway.</div>
-      </div>
-    </section>
-
-    <section class="wide">
-      <div class="section-head">
-        <h2>Provider Login</h2>
-        <div class="actions">
-          <button id="start-codex-login" type="button">Start Codex Device Login</button>
-          <button id="probe-providers-top" type="button">Probe Providers</button>
-        </div>
-      </div>
-      <div class="tool-panel">
-        <div id="provider-login-state" class="action-state">Codex login runs inside the LLMHQ container and prints a device-code URL here.</div>
-        <pre id="provider-login-log" class="log-output">No provider login session started.</pre>
       </div>
     </section>
 
