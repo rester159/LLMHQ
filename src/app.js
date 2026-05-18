@@ -173,6 +173,7 @@ export async function buildApp({
         workerId: request.body?.worker || request.body?.worker_id || "codex-1",
         mode: request.body?.mode || "device",
         config,
+        settings: runtime.settings,
       });
       return reply.send({ status: "ok", session });
     } catch (error) {

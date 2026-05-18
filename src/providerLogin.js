@@ -7,7 +7,7 @@ const sessions = new Map();
 const MAX_OUTPUT_CHARS = 12000;
 const LOGIN_TIMEOUT_MS = 15 * 60 * 1000;
 
-export async function startProviderLogin({ provider, workerId, config, mode = "device" }) {
+export async function startProviderLogin({ provider, workerId, config, settings = null, mode = "device" }) {
   if (!["claude", "codex"].includes(provider)) {
     throw new ProviderError("invalid_request", `Unsupported provider login: ${provider || "missing"}.`);
   }
@@ -19,7 +19,7 @@ export async function startProviderLogin({ provider, workerId, config, mode = "d
   }
 
   const providerConfig = config[provider];
-  const worker = findWorker(providerConfig, provider, workerId);
+  const worker = findWorker(providerConfig, provider, workerId, settings);
   const existing = findRunningSession(provider, worker.id);
   if (existing) {
     return snapshot(existing);
@@ -165,8 +165,11 @@ function quoteShellArg(value) {
   return `"${text.replace(/(["^&|<>])/g, "^$1")}"`;
 }
 
-function findWorker(providerConfig, provider, workerId) {
-  const workers = providerConfig?.workers?.length
+function findWorker(providerConfig, provider, workerId, settings) {
+  const settingsWorkers = settings?.workers?.[provider];
+  const workers = Array.isArray(settingsWorkers) && settingsWorkers.length
+    ? settingsWorkers
+    : providerConfig?.workers?.length
     ? providerConfig.workers
     : [{ id: `${provider}-local`, profileDir: null }];
   const worker = workerId ? workers.find((candidate) => candidate.id === workerId) : workers[0];

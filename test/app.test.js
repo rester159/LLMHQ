@@ -1035,6 +1035,41 @@ test("admin provider login starts codex device auth session", async () => {
   assert.match(session.profileDir, /codex-1/);
 });
 
+test("admin provider login can use newly saved runtime worker", async () => {
+  const assetDir = path.join(os.tmpdir(), `llmhq-test-${Date.now()}-provider-login-runtime-worker`);
+  const fakeCodexCommand = await writeFakeCodexCommand(assetDir);
+  const config = runtimeConfig(assetDir);
+  config.codex.command = fakeCodexCommand;
+  const app = await buildApp({
+    fastify: Fastify(),
+    config,
+    assetStore: new AssetStore(assetDir),
+  });
+
+  const initial = await app.inject({ method: "GET", url: "/admin/settings" });
+  const settings = initial.json().settings;
+  settings.workers.codex.push({
+    id: "codex-second",
+    profileDir: path.join(assetDir, "profiles", "codex-second"),
+  });
+
+  const saved = await app.inject({
+    method: "PUT",
+    url: "/admin/settings",
+    payload: settings,
+  });
+  assert.equal(saved.statusCode, 200);
+
+  const started = await app.inject({
+    method: "POST",
+    url: "/admin/provider-login",
+    payload: { provider: "codex", worker: "codex-second", mode: "device" },
+  });
+  assert.equal(started.statusCode, 200);
+  assert.equal(started.json().session.worker, "codex-second");
+  assert.match(started.json().session.profileDir, /codex-second/);
+});
+
 test("admin provider login starts claude browser auth session", async () => {
   const assetDir = path.join(os.tmpdir(), `llmhq-test-${Date.now()}-provider-login-claude`);
   const fakeClaudeCommand = await writeFakeClaudeCommand(assetDir);
@@ -1285,6 +1320,12 @@ test("admin webui renders and summarizes gateway state", async () => {
   assert.match(page.body, /LLMHQ Admin/);
   assert.match(page.body, /Start Claude Login/);
   assert.match(page.body, /Start Codex Device Login/);
+  assert.match(page.body, /\+ Claude Account/);
+  assert.match(page.body, /\+ Codex Account/);
+  assert.match(page.body, /Configured Workers/);
+  assert.match(page.body, /id="worker-editor"/);
+  assert.match(page.body, /data-worker-action="add"/);
+  assert.ok(page.body.indexOf("Provider Accounts") < page.body.indexOf("Model Fallback Chains"));
 
   const summary = await app.inject({ method: "GET", url: "/admin/api/summary" });
   assert.equal(summary.statusCode, 200);

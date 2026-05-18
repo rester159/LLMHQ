@@ -463,6 +463,72 @@ function adminHtml({ apiBaseUrl }) {
       display: grid;
       gap: 10px;
     }
+    .worker-editor {
+      padding: 16px 18px 18px;
+      display: grid;
+      gap: 14px;
+    }
+    .worker-groups {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+    }
+    .worker-group {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+      background: #fbfcfe;
+    }
+    .worker-group-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 12px;
+      border-bottom: 1px solid var(--line);
+      background: var(--surface);
+    }
+    .worker-group-title {
+      font-weight: 750;
+      font-size: 14px;
+      text-transform: capitalize;
+    }
+    .worker-list {
+      display: grid;
+      gap: 10px;
+      padding: 12px;
+    }
+    .worker-row {
+      display: grid;
+      grid-template-columns: minmax(120px, 0.8fr) minmax(220px, 1.6fr) auto;
+      gap: 8px;
+      align-items: center;
+    }
+    .worker-row input {
+      min-width: 0;
+      height: 34px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      padding: 6px 9px;
+      font: inherit;
+      font-size: 13px;
+      background: var(--surface);
+    }
+    .worker-row input:focus {
+      outline: 2px solid rgba(29, 78, 216, 0.18);
+      border-color: var(--blue);
+    }
+    .icon-button {
+      width: 34px;
+      min-width: 34px;
+      padding: 0;
+      font-size: 18px;
+      line-height: 1;
+    }
+    .icon-button.danger {
+      color: var(--red);
+      border-color: #fecaca;
+    }
     .tool-panel {
       padding: 16px 18px 18px;
       display: grid;
@@ -520,6 +586,8 @@ function adminHtml({ apiBaseUrl }) {
       header { align-items: flex-start; flex-direction: column; padding: 16px; }
       main { padding: 16px; }
       .grid { grid-template-columns: 1fr; }
+      .worker-groups { grid-template-columns: 1fr; }
+      .worker-row { grid-template-columns: 1fr; }
       .metric strong { font-size: 24px; }
     }
   </style>
@@ -562,6 +630,30 @@ function adminHtml({ apiBaseUrl }) {
         </div>
       </section>
     </div>
+
+    <section class="wide">
+      <div class="section-head">
+        <h2>Provider Accounts</h2>
+        <div class="actions">
+          <button id="add-claude-account" type="button">+ Claude Account</button>
+          <button id="add-codex-account" type="button">+ Codex Account</button>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Worker</th>
+              <th>Status</th>
+              <th>Command</th>
+              <th>Capabilities</th>
+              <th>Profile</th>
+            </tr>
+          </thead>
+          <tbody id="workers-body"></tbody>
+        </table>
+      </div>
+    </section>
 
     <section class="wide">
       <div class="section-head">
@@ -608,6 +700,13 @@ function adminHtml({ apiBaseUrl }) {
           <button id="save-settings" class="primary" type="button">Save Settings</button>
         </div>
       </div>
+      <div class="worker-editor">
+        <div class="section-head" style="padding:0;border:0;">
+          <h2>Configured Workers</h2>
+          <span class="hint">Edit worker ids and profile directories, then save settings.</span>
+        </div>
+        <div id="worker-editor" class="worker-groups"></div>
+      </div>
       <div class="settings-editor">
         <textarea id="settings-json" spellcheck="false" aria-label="LLMHQ runtime settings JSON"></textarea>
         <div id="settings-state" class="save-state">Settings are loaded from the gateway.</div>
@@ -638,24 +737,6 @@ function adminHtml({ apiBaseUrl }) {
     </section>
 
     <section class="wide">
-      <div class="section-head"><h2>Provider Accounts</h2></div>
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Worker</th>
-              <th>Status</th>
-              <th>Command</th>
-              <th>Capabilities</th>
-              <th>Profile</th>
-            </tr>
-          </thead>
-          <tbody id="workers-body"></tbody>
-        </table>
-      </div>
-    </section>
-
-    <section class="wide">
       <div class="section-head"><h2>Integration Endpoints</h2></div>
       <div class="table-wrap">
         <table>
@@ -679,11 +760,14 @@ function adminHtml({ apiBaseUrl }) {
     const probeProvidersTopEl = document.getElementById("probe-providers-top");
     const startClaudeLoginEl = document.getElementById("start-claude-login");
     const startCodexLoginEl = document.getElementById("start-codex-login");
+    const addClaudeAccountEl = document.getElementById("add-claude-account");
+    const addCodexAccountEl = document.getElementById("add-codex-account");
     const settingsEditorEl = document.getElementById("settings-json");
     const settingsStateEl = document.getElementById("settings-state");
     const probeStateEl = document.getElementById("probe-state");
     const providerLoginStateEl = document.getElementById("provider-login-state");
     const providerLoginLogEl = document.getElementById("provider-login-log");
+    const workerEditorEl = document.getElementById("worker-editor");
     let settingsDirty = false;
     let providerLoginPollTimer = null;
     let providerLoginSessionId = null;
@@ -695,10 +779,15 @@ function adminHtml({ apiBaseUrl }) {
     probeProvidersTopEl.addEventListener("click", probeProviders);
     startClaudeLoginEl.addEventListener("click", () => startProviderLogin("claude", "claude-1", "claudeai"));
     startCodexLoginEl.addEventListener("click", () => startProviderLogin("codex", "codex-1", "device"));
+    addClaudeAccountEl.addEventListener("click", () => addProviderAccount("claude"));
+    addCodexAccountEl.addEventListener("click", () => addProviderAccount("codex"));
     settingsEditorEl.addEventListener("input", () => {
       settingsDirty = true;
+      renderWorkerEditor(readSettingsEditor());
       setSettingsState("Unsaved settings edits.", "");
     });
+    workerEditorEl.addEventListener("input", handleWorkerEditorInput);
+    workerEditorEl.addEventListener("click", handleWorkerEditorClick);
     loadSummary();
 
     async function loadSummary() {
@@ -737,6 +826,7 @@ function adminHtml({ apiBaseUrl }) {
         return;
       }
       settingsEditorEl.value = JSON.stringify(settings, null, 2);
+      renderWorkerEditor(settings);
       setSettingsState("Settings are loaded from the gateway.", "");
     }
 
@@ -851,6 +941,52 @@ function adminHtml({ apiBaseUrl }) {
       }
     }
 
+    async function addProviderAccount(provider) {
+      const label = window.prompt("Name this " + provider + " account", provider + "-2");
+      const workerId = slugWorkerId(label, provider);
+      if (!workerId) {
+        return;
+      }
+      const settings = readSettingsEditor();
+      if (!settings) {
+        setSettingsState("Fix settings JSON before adding a worker.", "bad");
+        return;
+      }
+      settings.workers = settings.workers || {};
+      settings.workers[provider] = Array.isArray(settings.workers[provider]) ? settings.workers[provider] : [];
+      if (settings.workers[provider].some((worker) => worker.id === workerId)) {
+        setSettingsState(workerId + " already exists.", "bad");
+        return;
+      }
+
+      settings.workers[provider].push({
+        id: workerId,
+        profileDir: "/app/data/profiles/" + workerId,
+      });
+      writeSettingsEditor(settings);
+      setSettingsState("Saving " + workerId + " before login...", "");
+
+      try {
+        const response = await fetch("/admin/api/settings", {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ settings }),
+        });
+        const summary = await response.json();
+        if (!response.ok) {
+          throw new Error(summary?.error?.message || "Settings save failed");
+        }
+        settingsDirty = false;
+        renderSummary(summary);
+        renderSettings(summary.settings);
+        setSettingsState(workerId + " saved. Starting login...", "ok");
+        document.getElementById("provider-login-state").scrollIntoView({ behavior: "smooth", block: "center" });
+        await startProviderLogin(provider, workerId, provider === "claude" ? "claudeai" : "device");
+      } catch (error) {
+        setSettingsState(error.message || String(error), "bad");
+      }
+    }
+
     async function pollProviderLogin() {
       if (!providerLoginSessionId) {
         return;
@@ -923,6 +1059,123 @@ function adminHtml({ apiBaseUrl }) {
       }
     }
 
+    function renderWorkerEditor(settings) {
+      workerEditorEl.innerHTML = "";
+      if (!settings || !settings.workers) {
+        workerEditorEl.innerHTML = '<div class="empty">No editable worker settings returned.</div>';
+        return;
+      }
+      for (const provider of ["claude", "codex"]) {
+        const workers = Array.isArray(settings.workers[provider]) ? settings.workers[provider] : [];
+        const group = document.createElement("div");
+        group.className = "worker-group";
+        group.innerHTML =
+          '<div class="worker-group-head">' +
+            '<div class="worker-group-title">' + escapeHtml(provider) + '</div>' +
+            '<button class="icon-button" type="button" data-worker-action="add" data-provider="' + escapeHtml(provider) + '" title="Add ' + escapeHtml(provider) + ' worker">+</button>' +
+          '</div>' +
+          '<div class="worker-list" data-provider-list="' + escapeHtml(provider) + '"></div>';
+        const list = group.querySelector("[data-provider-list]");
+        if (!workers.length) {
+          list.innerHTML = '<div class="empty">No ' + escapeHtml(provider) + ' workers configured.</div>';
+        } else {
+          workers.forEach((worker, index) => {
+            const row = document.createElement("div");
+            row.className = "worker-row";
+            row.innerHTML =
+              '<input data-provider="' + escapeHtml(provider) + '" data-index="' + index + '" data-field="id" aria-label="' + escapeHtml(provider) + ' worker id" value="' + escapeAttribute(worker.id || "") + '">' +
+              '<input data-provider="' + escapeHtml(provider) + '" data-index="' + index + '" data-field="profileDir" aria-label="' + escapeHtml(provider) + ' profile directory" value="' + escapeAttribute(worker.profileDir || "") + '">' +
+              '<button class="icon-button danger" type="button" data-worker-action="remove" data-provider="' + escapeHtml(provider) + '" data-index="' + index + '" title="Remove worker">x</button>';
+            list.append(row);
+          });
+        }
+        workerEditorEl.append(group);
+      }
+    }
+
+    function handleWorkerEditorInput(event) {
+      const target = event.target;
+      if (!target?.dataset?.field) {
+        return;
+      }
+      const settings = readSettingsEditor();
+      if (!settings) {
+        return;
+      }
+      const provider = target.dataset.provider;
+      const index = Number.parseInt(target.dataset.index, 10);
+      const field = target.dataset.field;
+      settings.workers = settings.workers || {};
+      settings.workers[provider] = Array.isArray(settings.workers[provider]) ? settings.workers[provider] : [];
+      settings.workers[provider][index] = settings.workers[provider][index] || {};
+      settings.workers[provider][index][field] = target.value;
+      writeSettingsEditor(settings, { rerenderWorkers: false });
+      setSettingsState("Unsaved worker edits.", "");
+    }
+
+    function handleWorkerEditorClick(event) {
+      const action = event.target?.dataset?.workerAction;
+      if (!action) {
+        return;
+      }
+      const settings = readSettingsEditor();
+      if (!settings) {
+        return;
+      }
+      const provider = event.target.dataset.provider;
+      settings.workers = settings.workers || {};
+      settings.workers[provider] = Array.isArray(settings.workers[provider]) ? settings.workers[provider] : [];
+      if (action === "add") {
+        const nextNumber = settings.workers[provider].length + 1;
+        settings.workers[provider].push({
+          id: provider + "-" + nextNumber,
+          profileDir: defaultProfileDir(settings.workers[provider], provider, nextNumber),
+        });
+      } else if (action === "remove") {
+        const index = Number.parseInt(event.target.dataset.index, 10);
+        settings.workers[provider].splice(index, 1);
+      }
+      writeSettingsEditor(settings);
+      setSettingsState("Unsaved worker edits.", "");
+    }
+
+    function readSettingsEditor() {
+      try {
+        return JSON.parse(settingsEditorEl.value || "{}");
+      } catch {
+        workerEditorEl.innerHTML = '<div class="empty">Fix the settings JSON to edit workers here.</div>';
+        return null;
+      }
+    }
+
+    function writeSettingsEditor(settings, { rerenderWorkers = true } = {}) {
+      settingsDirty = true;
+      settingsEditorEl.value = JSON.stringify(settings, null, 2);
+      if (rerenderWorkers) {
+        renderWorkerEditor(settings);
+      }
+    }
+
+    function defaultProfileDir(workers, provider, nextNumber) {
+      const previous = workers.find((worker) => worker.profileDir);
+      if (previous?.profileDir) {
+        return previous.profileDir.replace(new RegExp(provider + "-\\\\d+$"), provider + "-" + nextNumber);
+      }
+      return "/app/data/profiles/" + provider + "-" + nextNumber;
+    }
+
+    function slugWorkerId(label, provider) {
+      const normalized = String(label || "")
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9_-]+/g, "-")
+        .replace(/^-+|-+$/g, "");
+      if (!normalized) {
+        return "";
+      }
+      return normalized.startsWith(provider + "-") ? normalized : provider + "-" + normalized;
+    }
+
     function renderProbe(results) {
       const body = document.getElementById("probe-body");
       body.innerHTML = "";
@@ -991,6 +1244,10 @@ function adminHtml({ apiBaseUrl }) {
         '"': "&quot;",
         "'": "&#39;"
       }[char]));
+    }
+
+    function escapeAttribute(value) {
+      return escapeHtml(value);
     }
   </script>
 </body>
