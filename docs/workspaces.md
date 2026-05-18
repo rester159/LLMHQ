@@ -1,6 +1,7 @@
 # Workspaces API Contract
 
-Status: planned. LLMHQ does not currently implement this contract.
+Status: implemented for answer-mode registration, scoped tokens, and
+`app_context_provider` retrieval. Agentic workspace execution is still planned.
 
 This document defines how any application should give LLMHQ scoped, durable
 context. A workspace is the generic unit of app-provided context. It may be a
@@ -173,6 +174,59 @@ Typical sources:
 ```
 
 LLMHQ calls the provider instead of directly reading the app database.
+
+## App Context Provider Auth
+
+Provider callbacks use server-to-server bearer tokens. Configure LLMHQ with a
+comma-separated provider token map:
+
+```env
+LLMHQ_WORKSPACE_PROVIDER_TOKENS=riff-repo-workspace-provider-v1=shared-secret
+```
+
+When a registered source has `type: "app_context_provider"`, LLMHQ calls:
+
+```http
+POST {base_url}/internal/llmhq/workspaces/{workspace_id}/retrieve
+Authorization: Bearer <token for provider_id>
+Content-Type: application/json
+```
+
+Request body:
+
+```json
+{
+  "query": "user prompt text",
+  "limits": {
+    "max_chunks": 8,
+    "max_chars": 18000
+  }
+}
+```
+
+Response body:
+
+```json
+{
+  "workspace_id": "repo:17:branch:main",
+  "chunks": [
+    {
+      "id": "file:planning/PRD.md",
+      "kind": "file",
+      "title": "planning/PRD.md",
+      "content": "bounded excerpt",
+      "metadata": {
+        "path": "planning/PRD.md"
+      }
+    }
+  ],
+  "next_cursor": null
+}
+```
+
+LLMHQ injects returned chunks as a system context message before the user's
+turn. The raw workspace envelope is used only by LLMHQ routing/retrieval and is
+not passed to the model as user text.
 
 ### Document Corpus
 

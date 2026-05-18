@@ -29,6 +29,7 @@ export function loadConfig(env = process.env) {
     assetDir: path.resolve(rootDir, mergedEnv.LLMHQ_ASSET_DIR || "./data/assets"),
     conversationDir: path.resolve(rootDir, mergedEnv.LLMHQ_CONVERSATION_DIR || "./data/conversations"),
     workspaceDir: path.resolve(rootDir, mergedEnv.LLMHQ_WORKSPACE_DIR || "./data/workspaces"),
+    workspaceProviderTokens: parseProviderTokens(mergedEnv.LLMHQ_WORKSPACE_PROVIDER_TOKENS),
     settingsFile: path.resolve(rootDir, mergedEnv.LLMHQ_SETTINGS_FILE || "./data/settings.json"),
     chat: {
       defaultModel: mergedEnv.LLMHQ_DEFAULT_CHAT_MODEL || "claude-sonnet",
@@ -72,6 +73,26 @@ export function loadConfig(env = process.env) {
       url: mergedEnv.LLMHQ_CHATGPT_URL || "https://chatgpt.com/",
     },
   };
+}
+
+function parseProviderTokens(value) {
+  if (!value) {
+    return {};
+  }
+  return Object.fromEntries(
+    String(value)
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter(Boolean)
+      .map((entry) => {
+        const separator = entry.indexOf("=");
+        if (separator === -1) {
+          return [entry, ""];
+        }
+        return [entry.slice(0, separator).trim(), entry.slice(separator + 1).trim()];
+      })
+      .filter(([providerId, token]) => providerId && token),
+  );
 }
 
 function loadEnvFile(rootDir) {

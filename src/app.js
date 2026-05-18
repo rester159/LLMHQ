@@ -16,6 +16,7 @@ import { llmhqInstance } from "./instance.js";
 import { createModelRegistry } from "./registry.js";
 import { defaultRuntimeSettings, SettingsStore } from "./settingsStore.js";
 import { WorkspaceStore, assertWorkspaceModeAllowed, normalizeWorkspaceRequest } from "./workspaces.js";
+import { retrieveWorkspaceContext, workspaceContextMessage } from "./workspaceRetrieval.js";
 
 export async function buildApp({
   fastify,
@@ -537,15 +538,23 @@ async function runConversationTurn({
     inputMessages,
     config.chat?.maxConversationMessages || 60,
   );
+  const retrievedChunks = await retrieveWorkspaceContext({
+    workspace,
+    workspaceRequest,
+    config,
+    query: inputMessages.map((message) => message.content).join("\n"),
+  });
+  const workspaceMessage = workspace ? workspaceContextMessage(workspace, retrievedChunks) : null;
+  const messages = workspaceMessage ? [workspaceMessage, ...contextMessages] : contextMessages;
   const completion = await runChatCompletion({
     activeRegistry,
     config,
     body: {
       ...body,
       model,
-      messages: contextMessages,
+      messages,
     },
-    messages: contextMessages,
+    messages,
     onStatus,
     defaultChatModel,
   });
@@ -561,7 +570,12 @@ async function runConversationTurn({
       ? {
           ...workspaces.summarize(workspace),
           mode: workspaceRequest.mode,
-          retrieved_chunks: [],
+          retrieved_chunks: retrievedChunks.map((chunk) => ({
+            id: chunk.id,
+            kind: chunk.kind,
+            title: chunk.title,
+            metadata: chunk.metadata,
+          })),
         }
       : null,
     chat_completion: {
@@ -814,7 +828,8 @@ function providerErrorRetryable(error) {
     error.code === "invalid_request" ||
     error.code === "unknown_model" ||
     error.code === "workspace_not_found" ||
-    error.code === "workspace_permission_denied"
+    error.code === "workspace_permission_denied" ||
+    error.code === "workspace_provider_denied"
   ) {
     return false;
   }
@@ -1005,7 +1020,7 @@ function sendProviderError(reply, error) {
   const status =
     providerError.code === "conversation_not_found" || providerError.code === "workspace_not_found"
       ? 404
-      : providerError.code === "workspace_permission_denied"
+      : providerError.code === "workspace_permission_denied" || providerError.code === "workspace_provider_denied"
         ? 403
       : providerError.code === "unknown_model" ||
           providerError.code === "invalid_request" ||

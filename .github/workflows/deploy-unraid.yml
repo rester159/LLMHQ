@@ -73,7 +73,11 @@ jobs:
           mv "${source_next}" "${base}/source"
 
           docker network create llmhq_private >/dev/null 2>&1 || true
-          LLMHQ_DATA_DIR="${base}/data" docker compose -p llmhq -f "${base}/source/compose.yaml" up -d --build llmhq webui network-sync
+          compose_env_args=()
+          if [ -f "${base}/.env" ]; then
+            compose_env_args=(--env-file "${base}/.env")
+          fi
+          LLMHQ_DATA_DIR="${base}/data" docker compose "${compose_env_args[@]}" -p llmhq -f "${base}/source/compose.yaml" up -d --build llmhq webui network-sync
           host_port="${LLMHQ_HOST_PORT:-18088}"
           webui_port="${LLMHQ_WEBUI_PORT:-18089}"
           host_probe_image="$(docker inspect -f '{{.Config.Image}}' llmhq)"

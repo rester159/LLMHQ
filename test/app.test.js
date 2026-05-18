@@ -777,6 +777,24 @@ test("workspace registry creates and reuses scoped workspace tokens", async () =
 test("conversation messages accept workspace answer mode and report workspace metadata", async () => {
   const assetDir = path.join(os.tmpdir(), `llmhq-test-${Date.now()}-workspace-conversation`);
   const seen = [];
+  const fetchCalls = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, options = {}) => {
+    fetchCalls.push({ url: String(url), options });
+    return rawJsonResponse({
+      workspace_id: "repo:1:branch:main",
+      chunks: [
+        {
+          id: "file:planning/PRD.md",
+          kind: "file",
+          title: "planning/PRD.md",
+          content: "Posting limits are tracked per platform policy and applied before post generation.",
+          metadata: { path: "planning/PRD.md" },
+        },
+      ],
+      next_cursor: null,
+    });
+  };
   const registry = createModelRegistry({
     fakeChatModels: [
       {
@@ -796,46 +814,65 @@ test("conversation messages accept workspace answer mode and report workspace me
   });
   const app = await buildApp({
     fastify: Fastify(),
-    config: { ...testConfig(assetDir), authMode: "none" },
+    config: {
+      ...testConfig(assetDir),
+      authMode: "none",
+      workspaceProviderTokens: { "riff-repo-workspace-provider-v1": "provider-secret" },
+    },
     registry,
   });
 
-  const workspaceResponse = await app.inject({
-    method: "POST",
-    url: "/v1/workspaces",
-    payload: {
-      app_id: "riff",
-      tenant_id: "local",
-      owner_subject: "user:1",
-      workspace_id: "repo:1:branch:main",
-      workspace_type: "repo",
-      sources: [{ type: "filesystem", kind: "git_repo", root: assetDir, branch: "main" }],
-      permissions: { read: true, search: true },
-    },
-  });
-  const token = workspaceResponse.json().workspace_token;
-
-  const response = await app.inject({
-    method: "POST",
-    url: "/v1/conversations/messages",
-    payload: {
-      project_id: "riff:rester159/riff",
-      conversation_key: "chat:1",
-      default_model: "claude-sonnet",
-      workspace: {
-        token,
-        mode: "answer",
-        retrieval: { strategy: "auto", max_chunks: 12 },
+  try {
+    const workspaceResponse = await app.inject({
+      method: "POST",
+      url: "/v1/workspaces",
+      payload: {
+        app_id: "riff",
+        tenant_id: "local",
+        owner_subject: "user:1",
+        workspace_id: "repo:1:branch:main",
+        workspace_type: "repo",
+        sources: [
+          {
+            type: "app_context_provider",
+            provider_id: "riff-repo-workspace-provider-v1",
+            base_url: "http://riff:3000",
+            workspace_id: "repo:1:branch:main",
+          },
+        ],
+        permissions: { read: true, search: true },
       },
-      message: { role: "user", content: "what is in the PRD?" },
-    },
-  });
+    });
+    const token = workspaceResponse.json().workspace_token;
 
-  assert.equal(response.statusCode, 200);
-  assert.equal(response.json().workspace.workspace_token, token);
-  assert.equal(response.json().workspace.mode, "answer");
-  assert.deepEqual(response.json().workspace.retrieved_chunks, []);
-  assert.equal(seen[0].at(-1).content, "what is in the PRD?");
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/conversations/messages",
+      payload: {
+        project_id: "riff:rester159/riff",
+        conversation_key: "chat:1",
+        default_model: "claude-sonnet",
+        workspace: {
+          token,
+          mode: "answer",
+          retrieval: { strategy: "auto", max_chunks: 12 },
+        },
+        message: { role: "user", content: "what is in the PRD?" },
+      },
+    });
+
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.json().workspace.workspace_token, token);
+    assert.equal(response.json().workspace.mode, "answer");
+    assert.equal(response.json().workspace.retrieved_chunks[0].title, "planning/PRD.md");
+    assert.equal(fetchCalls[0].url, "http://riff:3000/internal/llmhq/workspaces/repo%3A1%3Abranch%3Amain/retrieve");
+    assert.equal(fetchCalls[0].options.headers.authorization, "Bearer provider-secret");
+    assert.match(seen[0][0].content, /Workspace context retrieved by LLMHQ/);
+    assert.match(seen[0][0].content, /Posting limits are tracked per platform policy/);
+    assert.equal(seen[0].at(-1).content, "what is in the PRD?");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("workspace agent mode requires write or shell permission", async () => {

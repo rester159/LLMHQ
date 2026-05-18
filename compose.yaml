@@ -16,6 +16,8 @@ services:
       LLMHQ_AUTH_MODE: "none"
       LLMHQ_ASSET_DIR: "/app/data/assets"
       LLMHQ_CONVERSATION_DIR: "/app/data/conversations"
+      LLMHQ_WORKSPACE_DIR: "/app/data/workspaces"
+      LLMHQ_WORKSPACE_PROVIDER_TOKENS: "${LLMHQ_WORKSPACE_PROVIDER_TOKENS:-}"
       LLMHQ_SETTINGS_FILE: "/app/data/settings.json"
       LLMHQ_DEFAULT_CHAT_MODEL: "claude-sonnet"
       LLMHQ_MAX_CONVERSATION_MESSAGES: "60"
