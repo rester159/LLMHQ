@@ -200,7 +200,7 @@ function proxyHeaders(headers) {
   const forwarded = {};
   for (const [key, value] of Object.entries(headers || {})) {
     const normalized = key.toLowerCase();
-    if (["host", "connection", "content-length", "transfer-encoding"].includes(normalized)) {
+    if (["host", "connection", "content-length", "transfer-encoding", "expect"].includes(normalized)) {
       continue;
     }
     forwarded[key] = value;

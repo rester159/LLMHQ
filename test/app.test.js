@@ -1241,7 +1241,12 @@ test("admin provider login starts claude browser auth session", async () => {
 test("admin webui proxies generic v1 API requests to the gateway", async () => {
   let captured = null;
   const fetchImpl = async (url, options = {}) => {
-    captured = { url: String(url), method: options.method, body: JSON.parse(options.body) };
+    captured = {
+      url: String(url),
+      method: options.method,
+      headers: options.headers,
+      body: JSON.parse(options.body),
+    };
     return rawJsonResponse({
       id: "chatcmpl-test",
       object: "chat.completion",
@@ -1262,19 +1267,28 @@ test("admin webui proxies generic v1 API requests to the gateway", async () => {
       stream: false,
       messages: [{ role: "user", content: "hello" }],
     },
+    headers: {
+      expect: "100-continue",
+    },
   });
 
   assert.equal(response.statusCode, 200);
   assert.equal(response.json().choices[0].message.content, "ok");
   assert.equal(captured.url, "http://llmhq:8080/v1/chat/completions?trace=1");
   assert.equal(captured.method, "POST");
+  assert.equal(captured.headers.expect, undefined);
   assert.equal(captured.body.model, "claude-haiku");
 });
 
 test("proxy app forwards v1 requests and maps health to remote admin summary", async () => {
   const calls = [];
   const fetchImpl = async (url, options = {}) => {
-    calls.push({ url: String(url), method: options.method, body: options.body ? JSON.parse(options.body) : null });
+    calls.push({
+      url: String(url),
+      method: options.method,
+      headers: options.headers,
+      body: options.body ? JSON.parse(options.body) : null,
+    });
     if (String(url).endsWith("/admin/api/summary")) {
       return rawJsonResponse({
         status: "ok",
@@ -1304,6 +1318,9 @@ test("proxy app forwards v1 requests and maps health to remote admin summary", a
   const chat = await app.inject({
     method: "POST",
     url: "/v1/chat/completions",
+    headers: {
+      expect: "100-continue",
+    },
     payload: {
       model: "claude-haiku",
       fallback: "default",
@@ -1313,6 +1330,7 @@ test("proxy app forwards v1 requests and maps health to remote admin summary", a
   assert.equal(chat.statusCode, 200);
   assert.equal(chat.json().used_model, "claude-haiku");
   assert.equal(calls[1].url, "http://10.0.5.202:18089/v1/chat/completions");
+  assert.equal(calls[1].headers.expect, undefined);
   assert.equal(calls[1].body.model, "claude-haiku");
 });
 
