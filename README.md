@@ -22,6 +22,7 @@ This first slice implements a local chat/coding gateway for Claude Code and Code
 ## Documentation
 
 - [API documentation](docs/api-documentation.md)
+- [Workspaces API contract](docs/workspaces.md)
 - [Technical architecture](planning/technical-architecture.md)
 - [Product requirements](planning/prd.md)
 - [App refactoring prompt](docs/refactoring-prompt.md)

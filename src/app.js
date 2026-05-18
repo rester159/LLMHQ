@@ -15,6 +15,7 @@ import { getProviderLoginSession, startProviderLogin } from "./providerLogin.js"
 import { llmhqInstance } from "./instance.js";
 import { createModelRegistry } from "./registry.js";
 import { defaultRuntimeSettings, SettingsStore } from "./settingsStore.js";
+import { WorkspaceStore, assertWorkspaceModeAllowed, normalizeWorkspaceRequest } from "./workspaces.js";
 
 export async function buildApp({
   fastify,
@@ -22,11 +23,13 @@ export async function buildApp({
   registry = null,
   assetStore = null,
   conversationStore = null,
+  workspaceStore = null,
   settingsStore = null,
 } = {}) {
   const app = fastify || (await import("fastify")).default({ logger: true });
   const store = assetStore || new AssetStore(config.assetDir);
   const conversations = conversationStore || new ConversationStore(config.conversationDir);
+  const workspaces = workspaceStore || new WorkspaceStore(config.workspaceDir || `${config.assetDir}/workspaces`);
   const runtimeSettingsStore =
     settingsStore ||
     new SettingsStore({
@@ -57,6 +60,43 @@ export async function buildApp({
       object: "list",
       data: serializeModels(runtime.registry),
     };
+  });
+
+  app.post("/v1/workspaces", async (request, reply) => {
+    try {
+      const { workspace, created } = await workspaces.register(request.body || {});
+      return reply.code(created ? 201 : 200).send({
+        workspace: workspaces.summarize(workspace),
+        workspace_token: workspace.workspace_token,
+        status: workspace.status,
+        index_status: workspace.index_status,
+      });
+    } catch (error) {
+      return sendProviderError(reply, error);
+    }
+  });
+
+  app.get("/v1/workspaces/:workspaceToken", async (request, reply) => {
+    try {
+      const workspace = await workspaces.requireByToken(request.params.workspaceToken);
+      return reply.send({ workspace: workspaces.summarize(workspace) });
+    } catch (error) {
+      return sendProviderError(reply, error);
+    }
+  });
+
+  app.post("/v1/workspaces/:workspaceToken/refresh", async (request, reply) => {
+    try {
+      const workspace = await workspaces.refresh(request.params.workspaceToken, request.body || {});
+      return reply.send({
+        workspace: workspaces.summarize(workspace),
+        workspace_token: workspace.workspace_token,
+        status: workspace.status,
+        index_status: workspace.index_status,
+      });
+    } catch (error) {
+      return sendProviderError(reply, error);
+    }
   });
 
   app.get("/admin/settings", async () => {
@@ -274,6 +314,7 @@ export async function buildApp({
               activeRegistry: runtime.registry,
               config,
               conversations,
+              workspaces,
               conversation,
               body,
               onStatus,
@@ -286,6 +327,7 @@ export async function buildApp({
         activeRegistry: runtime.registry,
         config,
         conversations,
+        workspaces,
         conversation,
         body,
         defaultChatModel: getDefaultChatModel(runtime, config),
@@ -316,6 +358,7 @@ export async function buildApp({
               activeRegistry: runtime.registry,
               config,
               conversations,
+              workspaces,
               conversation,
               body,
               onStatus,
@@ -328,6 +371,7 @@ export async function buildApp({
         activeRegistry: runtime.registry,
         config,
         conversations,
+        workspaces,
         conversation,
         body,
         defaultChatModel: getDefaultChatModel(runtime, config),
@@ -472,6 +516,7 @@ async function runConversationTurn({
   activeRegistry,
   config,
   conversations,
+  workspaces,
   conversation,
   body,
   onStatus,
@@ -479,6 +524,11 @@ async function runConversationTurn({
 }) {
   const inputMessages = extractConversationInputMessages(body);
   const context = extractConversationContext(body);
+  const workspaceRequest = normalizeWorkspaceRequest(body.workspace);
+  const workspace = workspaceRequest ? await workspaces.requireByToken(workspaceRequest.token) : null;
+  if (workspaceRequest) {
+    assertWorkspaceModeAllowed(workspace, workspaceRequest);
+  }
   const conversationWithContext =
     context === undefined ? conversation : await conversations.updateContext(conversation.id, context);
   const model = body.model || conversation.default_model || defaultChatModel || config.chat?.defaultModel || activeRegistry.defaultModel("chat");
@@ -507,6 +557,13 @@ async function runConversationTurn({
 
   return {
     conversation: conversations.summarize(updated),
+    workspace: workspace
+      ? {
+          ...workspaces.summarize(workspace),
+          mode: workspaceRequest.mode,
+          retrieved_chunks: [],
+        }
+      : null,
     chat_completion: {
       ...completion,
       conversation_id: updated.id,
@@ -752,7 +809,13 @@ function providerErrorRetryable(error) {
   if (error.details?.authStatus) {
     return false;
   }
-  if (error.code === "auth_required" || error.code === "invalid_request" || error.code === "unknown_model") {
+  if (
+    error.code === "auth_required" ||
+    error.code === "invalid_request" ||
+    error.code === "unknown_model" ||
+    error.code === "workspace_not_found" ||
+    error.code === "workspace_permission_denied"
+  ) {
     return false;
   }
   return ["rate_limited", "worker_timeout", "worker_spawn_failed", "provider_error"].includes(error.code);
@@ -940,8 +1003,10 @@ function cryptoRandomId() {
 function sendProviderError(reply, error) {
   const providerError = toProviderError(error);
   const status =
-    providerError.code === "conversation_not_found"
+    providerError.code === "conversation_not_found" || providerError.code === "workspace_not_found"
       ? 404
+      : providerError.code === "workspace_permission_denied"
+        ? 403
       : providerError.code === "unknown_model" ||
           providerError.code === "invalid_request" ||
           providerError.code === "no_model_configured"

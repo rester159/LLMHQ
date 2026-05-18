@@ -742,6 +742,141 @@ test("conversation messages persist app context ahead of history", async () => {
   assert.equal(stored.json().conversation.context_message_count, 2);
 });
 
+test("workspace registry creates and reuses scoped workspace tokens", async () => {
+  const assetDir = path.join(os.tmpdir(), `llmhq-test-${Date.now()}-workspace-register`);
+  const app = await buildApp({
+    fastify: Fastify(),
+    config: { ...testConfig(assetDir), authMode: "none" },
+    registry: createModelRegistry({
+      fakeChatModels: [{ id: "claude-sonnet", workers: [new FakeChatWorker({ id: "fake-sonnet" })], fallback: [] }],
+    }),
+  });
+
+  const payload = {
+    app_id: "riff",
+    tenant_id: "local",
+    owner_subject: "user:1",
+    workspace_id: "repo:1:branch:main",
+    workspace_type: "repo",
+    display_name: "rester159/riff main",
+    sources: [{ type: "filesystem", kind: "git_repo", root: assetDir, branch: "main" }],
+    permissions: { read: true, search: true, write: false, shell: false },
+    metadata: { repo_full_name: "rester159/riff" },
+  };
+
+  const first = await app.inject({ method: "POST", url: "/v1/workspaces", payload });
+  const second = await app.inject({ method: "POST", url: "/v1/workspaces", payload });
+
+  assert.equal(first.statusCode, 201);
+  assert.equal(second.statusCode, 200);
+  assert.match(first.json().workspace_token, /^ws_live_/);
+  assert.equal(first.json().workspace_token, second.json().workspace_token);
+  assert.equal(first.json().workspace.workspace_id, "repo:1:branch:main");
+});
+
+test("conversation messages accept workspace answer mode and report workspace metadata", async () => {
+  const assetDir = path.join(os.tmpdir(), `llmhq-test-${Date.now()}-workspace-conversation`);
+  const seen = [];
+  const registry = createModelRegistry({
+    fakeChatModels: [
+      {
+        id: "claude-sonnet",
+        workers: [
+          {
+            id: "workspace-recorder",
+            async generateChat({ messages }) {
+              seen.push(messages);
+              return { content: "workspace ok", providerMetadata: {} };
+            },
+          },
+        ],
+        fallback: [],
+      },
+    ],
+  });
+  const app = await buildApp({
+    fastify: Fastify(),
+    config: { ...testConfig(assetDir), authMode: "none" },
+    registry,
+  });
+
+  const workspaceResponse = await app.inject({
+    method: "POST",
+    url: "/v1/workspaces",
+    payload: {
+      app_id: "riff",
+      tenant_id: "local",
+      owner_subject: "user:1",
+      workspace_id: "repo:1:branch:main",
+      workspace_type: "repo",
+      sources: [{ type: "filesystem", kind: "git_repo", root: assetDir, branch: "main" }],
+      permissions: { read: true, search: true },
+    },
+  });
+  const token = workspaceResponse.json().workspace_token;
+
+  const response = await app.inject({
+    method: "POST",
+    url: "/v1/conversations/messages",
+    payload: {
+      project_id: "riff:rester159/riff",
+      conversation_key: "chat:1",
+      default_model: "claude-sonnet",
+      workspace: {
+        token,
+        mode: "answer",
+        retrieval: { strategy: "auto", max_chunks: 12 },
+      },
+      message: { role: "user", content: "what is in the PRD?" },
+    },
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.json().workspace.workspace_token, token);
+  assert.equal(response.json().workspace.mode, "answer");
+  assert.deepEqual(response.json().workspace.retrieved_chunks, []);
+  assert.equal(seen[0].at(-1).content, "what is in the PRD?");
+});
+
+test("workspace agent mode requires write or shell permission", async () => {
+  const assetDir = path.join(os.tmpdir(), `llmhq-test-${Date.now()}-workspace-agent-denied`);
+  const registry = createModelRegistry({
+    fakeChatModels: [{ id: "claude-sonnet", workers: [new FakeChatWorker({ id: "fake-sonnet" })], fallback: [] }],
+  });
+  const app = await buildApp({
+    fastify: Fastify(),
+    config: { ...testConfig(assetDir), authMode: "none" },
+    registry,
+  });
+  const workspaceResponse = await app.inject({
+    method: "POST",
+    url: "/v1/workspaces",
+    payload: {
+      app_id: "riff",
+      tenant_id: "local",
+      workspace_id: "repo:1:branch:main",
+      workspace_type: "repo",
+      sources: [{ type: "filesystem", root: assetDir }],
+      permissions: { read: true, search: true, write: false, shell: false },
+    },
+  });
+
+  const response = await app.inject({
+    method: "POST",
+    url: "/v1/conversations/messages",
+    payload: {
+      project_id: "riff:rester159/riff",
+      conversation_key: "chat:agent",
+      default_model: "claude-sonnet",
+      workspace: { token: workspaceResponse.json().workspace_token, mode: "agent" },
+      message: { role: "user", content: "edit files" },
+    },
+  });
+
+  assert.equal(response.statusCode, 403);
+  assert.equal(response.json().error.code, "workspace_permission_denied");
+});
+
 test("conversation messages can continue by conversation id", async () => {
   const assetDir = path.join(os.tmpdir(), `llmhq-test-${Date.now()}-conversation-id`);
   const registry = createModelRegistry({
