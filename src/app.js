@@ -16,7 +16,13 @@ import { llmhqInstance } from "./instance.js";
 import { createModelRegistry } from "./registry.js";
 import { defaultRuntimeSettings, SettingsStore } from "./settingsStore.js";
 import { WorkspaceStore, assertWorkspaceModeAllowed, normalizeWorkspaceRequest } from "./workspaces.js";
-import { retrieveWorkspaceContext, workspaceContextMessage } from "./workspaceRetrieval.js";
+import {
+  callWorkspaceTool,
+  parseWorkspaceToolCall,
+  retrieveWorkspaceContext,
+  workspaceContextMessage,
+  workspaceToolInstruction,
+} from "./workspaceRetrieval.js";
 
 export async function buildApp({
   fastify,
@@ -544,17 +550,22 @@ async function runConversationTurn({
     config,
     query: inputMessages.map((message) => message.content).join("\n"),
   });
+  const workspaceMessages = [];
+  if (workspace) {
+    workspaceMessages.push(workspaceToolInstruction(workspace));
+  }
   const workspaceMessage = workspace ? workspaceContextMessage(workspace, retrievedChunks) : null;
-  const messages = workspaceMessage ? [workspaceMessage, ...contextMessages] : contextMessages;
-  const completion = await runChatCompletion({
+  if (workspaceMessage) {
+    workspaceMessages.push(workspaceMessage);
+  }
+  const messages = [...workspaceMessages, ...contextMessages];
+  const { completion, toolCalls } = await runWorkspaceAgentCompletion({
     activeRegistry,
     config,
-    body: {
-      ...body,
-      model,
-      messages,
-    },
+    body,
+    model,
     messages,
+    workspace,
     onStatus,
     defaultChatModel,
   });
@@ -576,6 +587,7 @@ async function runConversationTurn({
             title: chunk.title,
             metadata: chunk.metadata,
           })),
+          tool_calls: toolCalls,
         }
       : null,
     chat_completion: {
@@ -587,6 +599,81 @@ async function runConversationTurn({
       context_updated_at: updated.context?.updated_at || null,
     },
   };
+}
+
+async function runWorkspaceAgentCompletion({
+  activeRegistry,
+  config,
+  body,
+  model,
+  workspace,
+  messages,
+  onStatus,
+  defaultChatModel,
+}) {
+  if (!workspace) {
+    const completion = await runChatCompletion({
+      activeRegistry,
+      config,
+      body: { ...body, model, messages },
+      messages,
+      onStatus,
+      defaultChatModel,
+    });
+    return { completion, toolCalls: [] };
+  }
+
+  const workingMessages = [...messages];
+  const toolCalls = [];
+  const maxToolCalls = clampNumber(body.workspace?.agent?.max_tool_calls || body.workspace?.max_tool_calls || 4, 0, 8);
+  let completion = null;
+  for (let index = 0; index <= maxToolCalls; index += 1) {
+    completion = await runChatCompletion({
+      activeRegistry,
+      config,
+      body: { ...body, model, messages: workingMessages },
+      messages: workingMessages,
+      onStatus,
+      defaultChatModel,
+    });
+    const content = completion.choices[0].message.content;
+    const call = parseWorkspaceToolCall(content);
+    if (!call || index === maxToolCalls) {
+      return { completion, toolCalls };
+    }
+    const result = await callWorkspaceTool({ workspace, config, tool: call.tool, input: call.input });
+    const toolRecord = {
+      tool: call.tool,
+      input: call.input,
+      result: summarizeToolResult(result.result || result),
+    };
+    toolCalls.push(toolRecord);
+    workingMessages.push({
+      role: "system",
+      content: [
+        "Workspace tool result for internal use only. Do not quote this message in your final answer.",
+        JSON.stringify(toolRecord.result).slice(0, 60000),
+      ].join("\n"),
+    });
+  }
+  return { completion, toolCalls };
+}
+
+function summarizeToolResult(result) {
+  if (!result || typeof result !== "object") return result;
+  if (typeof result.stdout === "string" && result.stdout.length > 60000) {
+    return { ...result, stdout: `${result.stdout.slice(0, 60000)}\n[truncated]` };
+  }
+  if (typeof result.content === "string" && result.content.length > 60000) {
+    return { ...result, content: `${result.content.slice(0, 60000)}\n[truncated]` };
+  }
+  return result;
+}
+
+function clampNumber(value, min, max) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return min;
+  return Math.max(min, Math.min(max, numeric));
 }
 
 async function runChatCompletion({

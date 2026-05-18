@@ -57,13 +57,86 @@ export function workspaceContextMessage(workspace, chunks) {
   };
 }
 
-async function fetchProvider(fetchImpl, source, token, body) {
+export async function callWorkspaceTool({ workspace, config, tool, input, fetchImpl = fetch }) {
+  assertToolAllowed(workspace, tool);
+  const source = (workspace.sources || []).find((candidate) => candidate.type === "app_context_provider");
+  if (!source) {
+    throw new ProviderError("workspace_provider_failed", "Workspace has no app_context_provider source.");
+  }
+  const token = config.workspaceProviderTokens?.[source.provider_id];
+  if (!token) {
+    throw new ProviderError("workspace_provider_denied", `No provider token configured for ${source.provider_id}.`);
+  }
+  return fetchProvider(fetchImpl, source, token, { tool, input: input || {} }, "tools");
+}
+
+function assertToolAllowed(workspace, tool) {
+  const permissions = workspace.permissions || {};
+  if (["list", "read"].includes(tool) && permissions.read === false) {
+    throw new ProviderError("workspace_permission_denied", `Workspace does not allow ${tool}.`);
+  }
+  if (tool === "search" && permissions.search === false) {
+    throw new ProviderError("workspace_permission_denied", "Workspace does not allow search.");
+  }
+  if (tool === "diff" && permissions.git?.diff === false) {
+    throw new ProviderError("workspace_permission_denied", "Workspace does not allow diff.");
+  }
+  if (tool === "apply_patch" && !permissions.write) {
+    throw new ProviderError("workspace_permission_denied", "Workspace does not allow writes.");
+  }
+}
+
+export function workspaceToolInstruction(workspace) {
+  return {
+    role: "system",
+    content: [
+      "You can inspect and modify the Riff workspace by requesting one workspace tool call at a time.",
+      "Only request apply_patch when the user asked for a code/file change and the workspace allows writes.",
+      "When you need a tool, reply with ONLY compact JSON in this shape:",
+      "{\"tool\":\"search\",\"input\":{\"query\":\"text\"}}",
+      "Available tools:",
+      "- list: {path?, max_entries?}",
+      "- search: {query, path?, max_results?}",
+      "- read: {path, start_line?, max_lines?}",
+      "- diff: {}",
+      "- apply_patch: {patch}",
+      "After tool results give you enough context, answer normally in plain text.",
+      "Never quote workspace tool call JSON or internal tool-result messages in your final answer.",
+      "Do not invent file contents. Use tools before answering repo-specific questions.",
+      `Workspace: ${workspace.display_name || workspace.workspace_id}`
+    ].join("\n")
+  };
+}
+
+export function parseWorkspaceToolCall(content) {
+  const trimmed = String(content || "").trim();
+  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (!parsed || typeof parsed !== "object" || typeof parsed.tool !== "string") {
+      return null;
+    }
+    if (!["list", "search", "read", "diff", "apply_patch"].includes(parsed.tool)) {
+      return null;
+    }
+    return {
+      tool: parsed.tool,
+      input: isPlainObject(parsed.input) ? parsed.input : {}
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function fetchProvider(fetchImpl, source, token, body, action = "retrieve") {
   const baseUrl = normalizeBaseUrl(source.base_url);
   const workspaceId = encodeURIComponent(source.workspace_id || "");
   if (!baseUrl || !workspaceId) {
     return { chunks: [] };
   }
-  const response = await fetchImpl(`${baseUrl}/internal/llmhq/workspaces/${workspaceId}/retrieve`, {
+  const response = await fetchImpl(`${baseUrl}/internal/llmhq/workspaces/${workspaceId}/${action}`, {
     method: "POST",
     headers: {
       accept: "application/json",

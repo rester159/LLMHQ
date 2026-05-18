@@ -228,6 +228,40 @@ LLMHQ injects returned chunks as a system context message before the user's
 turn. The raw workspace envelope is used only by LLMHQ routing/retrieval and is
 not passed to the model as user text.
 
+LLMHQ may also call workspace tools through the same provider when the model
+needs to inspect or modify the workspace during its reasoning loop:
+
+```http
+POST {base_url}/internal/llmhq/workspaces/{workspace_id}/tools
+Authorization: Bearer <token for provider_id>
+Content-Type: application/json
+```
+
+Request body:
+
+```json
+{
+  "tool": "search",
+  "input": {
+    "query": "posting limits",
+    "path": "planning",
+    "max_results": 40
+  }
+}
+```
+
+Initial Riff tools:
+
+- `list`: list scoped workspace directory entries.
+- `search`: search text files inside the scoped workspace.
+- `read`: read a bounded line range from one text file.
+- `diff`: return the current workspace diff.
+- `apply_patch`: apply a unified diff inside the workspace.
+
+Riff remains the workspace authority. It validates paths, blocks denied
+directories and secret-like files, applies patches inside its canonical clone,
+and still owns commit/push.
+
 ### Document Corpus
 
 Use for uploaded documents, synced folders, or product knowledge bases.

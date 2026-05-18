@@ -867,8 +867,8 @@ test("conversation messages accept workspace answer mode and report workspace me
     assert.equal(response.json().workspace.retrieved_chunks[0].title, "planning/PRD.md");
     assert.equal(fetchCalls[0].url, "http://riff:3000/internal/llmhq/workspaces/repo%3A1%3Abranch%3Amain/retrieve");
     assert.equal(fetchCalls[0].options.headers.authorization, "Bearer provider-secret");
-    assert.match(seen[0][0].content, /Workspace context retrieved by LLMHQ/);
-    assert.match(seen[0][0].content, /Posting limits are tracked per platform policy/);
+    assert.match(seen[0][1].content, /Workspace context retrieved by LLMHQ/);
+    assert.match(seen[0][1].content, /Posting limits are tracked per platform policy/);
     assert.equal(seen[0].at(-1).content, "what is in the PRD?");
   } finally {
     globalThis.fetch = originalFetch;
@@ -907,6 +907,160 @@ test("workspace agent mode requires write or shell permission", async () => {
       default_model: "claude-sonnet",
       workspace: { token: workspaceResponse.json().workspace_token, mode: "agent" },
       message: { role: "user", content: "edit files" },
+    },
+  });
+
+  assert.equal(response.statusCode, 403);
+  assert.equal(response.json().error.code, "workspace_permission_denied");
+});
+
+test("workspace conversation can use provider tools before answering", async () => {
+  const assetDir = path.join(os.tmpdir(), `llmhq-test-${Date.now()}-workspace-tools`);
+  const fetchCalls = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, options = {}) => {
+    fetchCalls.push({ url: String(url), body: JSON.parse(options.body) });
+    if (String(url).endsWith("/retrieve")) {
+      return rawJsonResponse({ chunks: [], next_cursor: null });
+    }
+    return rawJsonResponse({
+      result: {
+        tool: "search",
+        query: "marker",
+        results: [{ path: "README.md", line: 3, text: "marker: from-tool" }],
+      },
+    });
+  };
+  let callCount = 0;
+  const registry = createModelRegistry({
+    fakeChatModels: [
+      {
+        id: "claude-sonnet",
+        workers: [
+          {
+            id: "tool-recorder",
+            async generateChat({ messages }) {
+              callCount += 1;
+              if (callCount === 1) {
+                return { content: "{\"tool\":\"search\",\"input\":{\"query\":\"marker\"}}", providerMetadata: {} };
+              }
+              assert.match(messages.at(-1).content, /from-tool/);
+              return { content: "from-tool", providerMetadata: {} };
+            },
+          },
+        ],
+        fallback: [],
+      },
+    ],
+  });
+  const app = await buildApp({
+    fastify: Fastify(),
+    config: {
+      ...testConfig(assetDir),
+      authMode: "none",
+      workspaceProviderTokens: { "riff-repo-workspace-provider-v1": "provider-secret" },
+    },
+    registry,
+  });
+
+  try {
+    const workspaceResponse = await app.inject({
+      method: "POST",
+      url: "/v1/workspaces",
+      payload: {
+        app_id: "riff",
+        tenant_id: "local",
+        workspace_id: "repo:tools",
+        workspace_type: "repo",
+        sources: [
+          {
+            type: "app_context_provider",
+            provider_id: "riff-repo-workspace-provider-v1",
+            base_url: "http://riff:3000",
+            workspace_id: "repo:tools",
+          },
+        ],
+        permissions: { read: true, search: true },
+      },
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/conversations/messages",
+      payload: {
+        project_id: "riff:tools",
+        conversation_key: "chat:tools",
+        default_model: "claude-sonnet",
+        workspace: { token: workspaceResponse.json().workspace_token, mode: "answer", agent: { max_tool_calls: 2 } },
+        message: { role: "user", content: "find the marker" },
+      },
+    });
+
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.json().chat_completion.choices[0].message.content, "from-tool");
+    assert.equal(response.json().workspace.tool_calls[0].tool, "search");
+    assert.equal(fetchCalls.some((call) => call.url.endsWith("/tools")), true);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("workspace apply_patch tool requires write permission", async () => {
+  const assetDir = path.join(os.tmpdir(), `llmhq-test-${Date.now()}-workspace-write-denied`);
+  const registry = createModelRegistry({
+    fakeChatModels: [
+      {
+        id: "claude-sonnet",
+        workers: [
+          {
+            id: "write-requester",
+            async generateChat() {
+              return { content: "{\"tool\":\"apply_patch\",\"input\":{\"patch\":\"diff --git a/a b/a\"}}", providerMetadata: {} };
+            },
+          },
+        ],
+        fallback: [],
+      },
+    ],
+  });
+  const app = await buildApp({
+    fastify: Fastify(),
+    config: {
+      ...testConfig(assetDir),
+      authMode: "none",
+      workspaceProviderTokens: { "riff-repo-workspace-provider-v1": "provider-secret" },
+    },
+    registry,
+  });
+  const workspaceResponse = await app.inject({
+    method: "POST",
+    url: "/v1/workspaces",
+    payload: {
+      app_id: "riff",
+      tenant_id: "local",
+      workspace_id: "repo:readonly",
+      workspace_type: "repo",
+      sources: [
+        {
+          type: "app_context_provider",
+          provider_id: "riff-repo-workspace-provider-v1",
+          base_url: "http://riff:3000",
+          workspace_id: "repo:readonly",
+        },
+      ],
+      permissions: { read: true, search: true, write: false },
+    },
+  });
+
+  const response = await app.inject({
+    method: "POST",
+    url: "/v1/conversations/messages",
+    payload: {
+      project_id: "riff:readonly",
+      conversation_key: "chat:readonly",
+      default_model: "claude-sonnet",
+      workspace: { token: workspaceResponse.json().workspace_token, mode: "answer", retrieval: { strategy: "none" } },
+      message: { role: "user", content: "patch it" },
     },
   });
 
