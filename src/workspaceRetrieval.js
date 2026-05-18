@@ -110,11 +110,13 @@ export function workspaceToolInstruction(workspace) {
 
 export function parseWorkspaceToolCall(content) {
   const trimmed = String(content || "").trim();
-  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
+  if (!trimmed.startsWith("{")) {
     return null;
   }
+  const jsonText = extractLeadingJsonObject(trimmed);
+  if (!jsonText) return null;
   try {
-    const parsed = JSON.parse(trimmed);
+    const parsed = JSON.parse(jsonText);
     if (!parsed || typeof parsed !== "object" || typeof parsed.tool !== "string") {
       return null;
     }
@@ -128,6 +130,35 @@ export function parseWorkspaceToolCall(content) {
   } catch {
     return null;
   }
+}
+
+function extractLeadingJsonObject(content) {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = 0; index < content.length; index += 1) {
+    const char = content[index];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === "\"") {
+        inString = false;
+      }
+      continue;
+    }
+    if (char === "\"") {
+      inString = true;
+      continue;
+    }
+    if (char === "{") depth += 1;
+    if (char === "}") {
+      depth -= 1;
+      if (depth === 0) return content.slice(0, index + 1);
+    }
+  }
+  return null;
 }
 
 async function fetchProvider(fetchImpl, source, token, body, action = "retrieve") {
