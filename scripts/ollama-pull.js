@@ -1,11 +1,16 @@
 import { loadConfig } from "../src/config.js";
 
 const config = loadConfig();
-const model = process.argv[2] || config.ollama.defaultModel || "llama3.2";
+const model = normalizeModelName(process.argv[2] || config.ollama.defaultModel || "llama3.2");
 const baseUrl = String(process.env.LLMHQ_OLLAMA_BASE_URL || config.ollama.baseUrl || "http://127.0.0.1:11434").replace(
   /\/+$/,
   "",
 );
+
+if (await modelIsInstalled(baseUrl, model)) {
+  console.log(`Ollama model already installed: ${model}`);
+  process.exit(0);
+}
 
 console.log(`Pulling Ollama model ${model} from ${baseUrl}`);
 
@@ -49,3 +54,21 @@ for (;;) {
 }
 
 console.log(`Ollama model ready: ${model}`);
+
+async function modelIsInstalled(baseUrl, model) {
+  const response = await fetch(`${baseUrl}/api/tags`);
+  if (!response.ok) {
+    return false;
+  }
+  const body = await response.json();
+  const names = Array.isArray(body.models) ? body.models.map((entry) => normalizeModelName(entry.name || "")) : [];
+  return names.includes(normalizeModelName(model));
+}
+
+function normalizeModelName(value) {
+  const text = String(value || "").trim();
+  if (!text) {
+    return "";
+  }
+  return text.includes(":") ? text : `${text}:latest`;
+}
