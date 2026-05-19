@@ -104,7 +104,7 @@ Default behavior:
 - `claude-sonnet` falls back to `codex-gpt-5.5`.
 - `claude-opus` falls back to `claude-sonnet`, then `codex-gpt-5.5`.
 - `codex-gpt-5.5` falls back to `claude-sonnet`.
-- `ollama-llama3.2` falls back to `claude-sonnet`.
+- `ollama-llama3.2` falls back to `claude-haiku`.
 - `ollama-qwen2.5-coder` falls back to `codex-gpt-5.5`, then `claude-sonnet`.
 
 Apps may disable fallback with:

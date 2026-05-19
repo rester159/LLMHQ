@@ -54,7 +54,7 @@ const MODEL_DEFAULTS = {
     cliModelKey: "defaultModel",
     cliModel: "llama3.2",
     capabilities: ["chat", "local", "private"],
-    fallback: ["claude-sonnet"],
+    fallback: ["claude-haiku"],
     output: ["text"],
   },
   "ollama-qwen2.5-coder": {
@@ -385,6 +385,17 @@ function mergeMissingDefaults(settings, defaults) {
       models[id] = {
         ...models[id],
         capabilities: model.capabilities,
+      };
+      changed = true;
+    }
+    if (
+      id === "ollama-llama3.2" &&
+      arraysEqual(models[id].fallback, ["claude-sonnet"]) &&
+      arraysEqual(model.fallback, ["claude-haiku"])
+    ) {
+      models[id] = {
+        ...models[id],
+        fallback: model.fallback,
       };
       changed = true;
     }

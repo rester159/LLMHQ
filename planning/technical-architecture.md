@@ -103,7 +103,7 @@ flowchart TD
   Opus -->|"fallback"| Sonnet
   Opus -->|"fallback"| Codex
   Codex -->|"fallback"| Sonnet
-  Ollama -->|"fallback"| Sonnet
+  Ollama -->|"fallback"| Haiku
   OllamaCoder -->|"fallback"| Codex
   OllamaCoder -->|"fallback"| Sonnet
 ```

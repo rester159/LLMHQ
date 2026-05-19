@@ -84,7 +84,7 @@ export function createModelRegistry({
 
   if (!settings && ollama?.enabled) {
     const workers = buildOllamaWorkers(ollama);
-    addChatModel(models, "ollama-llama3.2", workers, ollama.defaultModel, ["claude-sonnet"], [
+    addChatModel(models, "ollama-llama3.2", workers, ollama.defaultModel, ["claude-haiku"], [
       "chat",
       "local",
       "private",

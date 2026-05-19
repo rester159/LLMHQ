@@ -1356,6 +1356,7 @@ test("runtime settings expose Ollama model aliases when Ollama is enabled", asyn
   assert.equal(settings.models["ollama-llama3.2"].enabled, true);
   assert.equal(settings.models["ollama-llama3.2"].provider, "ollama");
   assert.equal(settings.models["ollama-llama3.2"].cliModel, "llama3.2");
+  assert.deepEqual(settings.models["ollama-llama3.2"].fallback, ["claude-haiku"]);
   assert.equal(settings.models["ollama-qwen2.5-coder"].enabled, false);
 
   const modelsResponse = await app.inject({ method: "GET", url: "/v1/models" });
@@ -1363,6 +1364,7 @@ test("runtime settings expose Ollama model aliases when Ollama is enabled", asyn
   const models = new Map(modelsResponse.json().data.map((model) => [model.id, model]));
   assert.equal(models.get("ollama-llama3.2").provider, "ollama");
   assert.deepEqual(models.get("ollama-llama3.2").capabilities, ["chat", "local", "private"]);
+  assert.deepEqual(models.get("ollama-llama3.2").fallback, ["claude-haiku"]);
 });
 
 test("existing settings files add the default Ollama worker when Ollama aliases are introduced", async () => {
@@ -1421,6 +1423,80 @@ test("existing settings files add the default Ollama worker when Ollama aliases 
   const persisted = JSON.parse(await fs.readFile(path.join(assetDir, "settings.json"), "utf8"));
   assert.deepEqual(persisted.workers.ollama, [{ id: "ollama-local", baseUrl: "http://ollama:11434" }]);
   assert.equal(persisted.models["ollama-llama3.2"].provider, "ollama");
+  assert.deepEqual(persisted.models["ollama-llama3.2"].fallback, ["claude-haiku"]);
+});
+
+test("existing Ollama settings migrate from Sonnet fallback to Haiku fallback", async () => {
+  const assetDir = path.join(os.tmpdir(), `llmhq-test-${Date.now()}-ollama-fallback-migration`);
+  await fs.mkdir(assetDir, { recursive: true });
+  await fs.writeFile(
+    path.join(assetDir, "settings.json"),
+    JSON.stringify(
+      {
+        version: 1,
+        defaultModel: "claude-sonnet",
+        workers: {
+          claude: [{ id: "claude-1", profileDir: path.join(assetDir, "profiles", "claude-1") }],
+          ollama: [{ id: "ollama-local", baseUrl: "http://ollama:11434" }],
+        },
+        models: {
+          "claude-haiku": {
+            enabled: true,
+            kind: "chat",
+            provider: "claude",
+            cliModel: "haiku",
+            capabilities: ["chat", "vision", "fast"],
+            output: ["text"],
+            fallback: [],
+          },
+          "claude-sonnet": {
+            enabled: true,
+            kind: "chat",
+            provider: "claude",
+            cliModel: "sonnet",
+            capabilities: ["chat", "vision", "smart"],
+            output: ["text"],
+            fallback: [],
+          },
+          "ollama-llama3.2": {
+            enabled: true,
+            kind: "chat",
+            provider: "ollama",
+            cliModel: "llama3.2",
+            capabilities: ["chat", "local", "private"],
+            output: ["text"],
+            fallback: ["claude-sonnet"],
+          },
+        },
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+
+  const config = runtimeConfig(assetDir);
+  config.ollama = {
+    enabled: true,
+    baseUrl: "http://ollama:11434",
+    timeoutMs: 1000,
+    workers: [{ id: "ollama-local", baseUrl: "http://ollama:11434" }],
+    defaultModel: "llama3.2",
+    coderModel: "qwen2.5-coder:7b",
+  };
+
+  const app = await buildApp({
+    fastify: Fastify(),
+    config,
+    assetStore: new AssetStore(assetDir),
+  });
+
+  const response = await app.inject({ method: "GET", url: "/admin/settings" });
+  assert.equal(response.statusCode, 200);
+  assert.deepEqual(response.json().settings.models["ollama-llama3.2"].fallback, ["claude-haiku"]);
+
+  const persisted = JSON.parse(await fs.readFile(path.join(assetDir, "settings.json"), "utf8"));
+  assert.deepEqual(persisted.models["ollama-llama3.2"].fallback, ["claude-haiku"]);
 });
 
 test("admin provider probe reports provider usability without changing app payload contract", async () => {

@@ -101,7 +101,7 @@ Default fallback chains:
 | `claude-opus` | `claude-sonnet`, `codex-gpt-5.5` |
 | `codex-gpt-5.5` | `claude-sonnet` |
 | `codex-gpt-5.5-vision` | none |
-| `ollama-llama3.2` | `claude-sonnet` |
+| `ollama-llama3.2` | `claude-haiku` |
 | `ollama-qwen2.5-coder` | `codex-gpt-5.5`, `claude-sonnet` |
 | `chatgpt-image-browser` | none |
 
@@ -353,4 +353,3 @@ docker compose exec llmhq npm run doctor
 Invoke-RestMethod http://127.0.0.1:18088/health | ConvertTo-Json -Depth 8
 Invoke-RestMethod http://127.0.0.1:18088/v1/models | ConvertTo-Json -Depth 8
 ```
-
