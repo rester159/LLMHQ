@@ -59,15 +59,23 @@ jobs:
           set -euo pipefail
           base="${LLMHQ_DEPLOY_PATH}"
           source_next="${base}/source.next"
+          data_dir="${base}/data"
+          ollama_data_dir="${data_dir}/ollama"
 
-          mkdir -p "${base}/data"
+          mkdir -p "${data_dir}"
+          if [ -e "${ollama_data_dir}" ] && [ ! -d "${ollama_data_dir}" ]; then
+            moved_ollama_path="${ollama_data_dir}.broken-${GITHUB_RUN_ID:-$(date +%s)}"
+            mv "${ollama_data_dir}" "${moved_ollama_path}"
+            echo "Moved non-directory Ollama data path to ${moved_ollama_path}"
+          fi
+          mkdir -p "${ollama_data_dir}"
           rm -rf "${source_next}"
           mkdir -p "${source_next}"
           tar -xzf "/tmp/llmhq-${GITHUB_SHA}.tgz" -C "${source_next}"
-          docker rm -f llmhq-network-sync llmhq-webui >/dev/null 2>&1 || true
+          docker rm -f llmhq-network-sync llmhq-webui llmhq-ollama >/dev/null 2>&1 || true
           if [ -f "${base}/source/compose.yaml" ]; then
-            LLMHQ_DATA_DIR="${base}/data" docker compose -p llmhq -f "${base}/source/compose.yaml" stop network-sync >/dev/null 2>&1 || true
-            LLMHQ_DATA_DIR="${base}/data" docker compose -p llmhq -f "${base}/source/compose.yaml" rm -f network-sync >/dev/null 2>&1 || true
+            LLMHQ_DATA_DIR="${data_dir}" LLMHQ_OLLAMA_DATA_DIR="${ollama_data_dir}" docker compose -p llmhq -f "${base}/source/compose.yaml" stop network-sync >/dev/null 2>&1 || true
+            LLMHQ_DATA_DIR="${data_dir}" LLMHQ_OLLAMA_DATA_DIR="${ollama_data_dir}" docker compose -p llmhq -f "${base}/source/compose.yaml" rm -f network-sync >/dev/null 2>&1 || true
           fi
           rm -rf "${base}/source"
           mv "${source_next}" "${base}/source"
@@ -77,7 +85,7 @@ jobs:
           if [ -f "${base}/.env" ]; then
             compose_env_args=(--env-file "${base}/.env")
           fi
-          LLMHQ_DATA_DIR="${base}/data" docker compose "${compose_env_args[@]}" -p llmhq -f "${base}/source/compose.yaml" up -d --build ollama llmhq webui network-sync
+          LLMHQ_DATA_DIR="${data_dir}" LLMHQ_OLLAMA_DATA_DIR="${ollama_data_dir}" docker compose "${compose_env_args[@]}" -p llmhq -f "${base}/source/compose.yaml" up -d --build ollama llmhq webui network-sync
           if ! docker exec llmhq sh -lc 'npm run ollama:pull -- "${LLMHQ_OLLAMA_DEFAULT_MODEL:-llama3.2}"'; then
             echo "Ollama pull failed; continuing to readiness probe in case the model is already installed."
           fi
