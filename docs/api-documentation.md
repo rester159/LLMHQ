@@ -8,6 +8,7 @@ Current provider workers:
 
 - Claude CLI worker for `claude-haiku`, `claude-sonnet`, and `claude-opus`.
 - Codex CLI worker for `codex-gpt-5.5`.
+- Ollama HTTP worker for local models such as `ollama-llama3.2`.
 - Experimental ChatGPT browser worker for `chatgpt-image-browser` image generation.
 
 Current server defaults:
@@ -92,9 +93,11 @@ Apps should use LLMHQ model aliases, not provider-native model names.
 | `claude-opus` | Chat | chat, vision, deep reasoning | Claude CLI |
 | `codex-gpt-5.5` | Chat | chat, code | Codex CLI |
 | `codex-gpt-5.5-vision` | Chat | chat, vision, image input | Codex CLI |
+| `ollama-llama3.2` | Chat | chat, local, private | Ollama HTTP |
+| `ollama-qwen2.5-coder` | Chat | chat, code, local, private | Ollama HTTP, disabled by default until pulled/enabled |
 | `chatgpt-image-browser` | Image | image generation, experimental image edit | ChatGPT browser |
 
-`codex-gpt-5.5` and `codex-gpt-5.5-vision` route to the same Codex CLI provider model by default, but they are separate LLMHQ aliases so applications can request text/code turns and image-input vision turns explicitly. `chatgpt-image-browser` is an image-output model and is called through `/v1/images/generations`, not `/v1/chat/completions`.
+`codex-gpt-5.5` and `codex-gpt-5.5-vision` route to the same Codex CLI provider model by default, but they are separate LLMHQ aliases so applications can request text/code turns and image-input vision turns explicitly. `ollama-llama3.2` routes to the local Ollama container and requires the native `llama3.2` model to be pulled. `chatgpt-image-browser` is an image-output model and is called through `/v1/images/generations`, not `/v1/chat/completions`.
 
 Fetch the live list from:
 
@@ -115,6 +118,8 @@ Default fallback chains:
 | `claude-opus` | `claude-sonnet`, then `codex-gpt-5.5` |
 | `codex-gpt-5.5` | `claude-sonnet` |
 | `codex-gpt-5.5-vision` | none |
+| `ollama-llama3.2` | `claude-sonnet` |
+| `ollama-qwen2.5-coder` | `codex-gpt-5.5`, then `claude-sonnet` |
 | `chatgpt-image-browser` | none |
 
 Default behavior:
@@ -1063,6 +1068,7 @@ Common error codes:
 | `auth_required` | 503 | A provider session, such as Claude CLI, Codex CLI, or ChatGPT browser, is not logged in or usable. |
 | `provider_error` | 503 | A provider worker failed. |
 | `provider_timeout` | 503 | A provider worker timed out. |
+| `model_not_installed` | 503 | An Ollama native model has not been pulled yet. |
 
 Provider failures include `attempts` when the dispatcher reached a provider worker. Each failed attempt includes the same `code`, `message`, `retryable`, `auth_status`, and sanitized `diagnostic` fields as the top-level error. When Codex returns `auth_status: "token_invalidated"` or `auth_status: "refresh_token_reused"`, the request payload reached LLMHQ correctly, but the Codex CLI worker profile must be re-authenticated. Application teams should not change the chat payload shape for that failure.
 
@@ -1081,6 +1087,7 @@ Docker setup:
 
 ```powershell
 docker compose up -d --build
+docker compose exec llmhq npm run ollama:pull -- llama3.2
 docker compose exec llmhq npm run login:claude -- claude-1
 docker compose exec llmhq npm run login:codex -- codex-1
 docker compose exec llmhq npm run login:chatgpt:vnc
@@ -1095,6 +1102,22 @@ http://127.0.0.1:7900/vnc.html?autoconnect=1&resize=scale
 ```
 
 Log in interactively with Google in the remote browser, then press Enter in the login command terminal when the ChatGPT prompt box is usable.
+
+Ollama does not require provider login. It does require local model files. The default Compose setup starts `llmhq-ollama` and stores models under `${LLMHQ_OLLAMA_DATA_DIR:-./data/ollama}`. Pull the default native model with:
+
+```powershell
+docker compose exec llmhq npm run ollama:pull -- llama3.2
+```
+
+After the pull, apps can call LLMHQ with:
+
+```json
+{
+  "model": "ollama-llama3.2",
+  "fallback": "default",
+  "messages": [{ "role": "user", "content": "Reply with exactly ok." }]
+}
+```
 
 ## Environment Variables
 
@@ -1122,6 +1145,12 @@ Log in interactively with Google in the remote browser, then press Enter in the 
 | `LLMHQ_CODEX_WORKERS` | empty | Comma-separated worker specs like `codex-1=./data/profiles/codex-1`. |
 | `LLMHQ_CODEX_MODEL` | `gpt-5.5` | Provider-native Codex model argument. |
 | `LLMHQ_CODEX_WORKDIR` | `.` | Working directory used by Codex CLI. |
+| `LLMHQ_OLLAMA_ENABLED` | `false` | Enables Ollama HTTP chat models. |
+| `LLMHQ_OLLAMA_BASE_URL` | `http://127.0.0.1:11434` | Base URL for the default Ollama server. Compose sets this to `http://ollama:11434`. |
+| `LLMHQ_OLLAMA_WORKERS` | empty | Comma-separated worker specs like `ollama-local=http://ollama:11434`. |
+| `LLMHQ_OLLAMA_DEFAULT_MODEL` | `llama3.2` | Native Ollama model backing `ollama-llama3.2`. |
+| `LLMHQ_OLLAMA_CODER_MODEL` | `qwen2.5-coder:7b` | Native Ollama model backing the disabled-by-default coder alias. |
+| `LLMHQ_OLLAMA_TIMEOUT_MS` | `180000` | Ollama worker timeout. |
 | `LLMHQ_EXPERIMENTAL_CHATGPT_BROWSER` | `false` | Enables browser-backed ChatGPT image worker. |
 | `LLMHQ_CHATGPT_PROFILE_DIR` | `./data/browser-profiles/chatgpt-main` | Persistent browser profile. |
 | `LLMHQ_CHATGPT_HEADLESS` | `false` | Headless browser mode for generation. |
@@ -1203,6 +1232,7 @@ Run tests:
 
 ```powershell
 npm test
+npm run ollama:pull -- llama3.2
 ```
 
 Run provider doctor:

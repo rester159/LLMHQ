@@ -1,8 +1,23 @@
 services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: llmhq-ollama
+    restart: unless-stopped
+    expose:
+      - "11434"
+    volumes:
+      - ${LLMHQ_OLLAMA_DATA_DIR:-./data/ollama}:/root/.ollama
+    networks:
+      llmhq_private:
+        aliases:
+          - ollama
+
   llmhq:
     build: .
     container_name: llmhq
     restart: unless-stopped
+    depends_on:
+      - ollama
     ports:
       - "${LLMHQ_HOST_BIND:-127.0.0.1}:${LLMHQ_HOST_PORT:-18088}:8080"
     labels:
@@ -29,6 +44,12 @@ services:
       LLMHQ_CODEX_COMMAND: "codex"
       LLMHQ_CODEX_WORKERS: "codex-1=/app/data/profiles/codex-1"
       LLMHQ_CODEX_WORKDIR: "/app/data/codex-workdir"
+      LLMHQ_OLLAMA_ENABLED: "1"
+      LLMHQ_OLLAMA_BASE_URL: "http://ollama:11434"
+      LLMHQ_OLLAMA_WORKERS: "ollama-local=http://ollama:11434"
+      LLMHQ_OLLAMA_DEFAULT_MODEL: "${LLMHQ_OLLAMA_DEFAULT_MODEL:-llama3.2}"
+      LLMHQ_OLLAMA_CODER_MODEL: "${LLMHQ_OLLAMA_CODER_MODEL:-qwen2.5-coder:7b}"
+      LLMHQ_OLLAMA_TIMEOUT_MS: "${LLMHQ_OLLAMA_TIMEOUT_MS:-180000}"
       LLMHQ_EXPERIMENTAL_CHATGPT_BROWSER: "1"
       LLMHQ_CHATGPT_PROFILE_DIR: "/app/data/browser-profiles/chatgpt-main"
       LLMHQ_CHATGPT_HEADLESS: "1"

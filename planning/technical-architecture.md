@@ -4,7 +4,7 @@
 
 LLMHQ is a private, same-server LLM gateway. Product apps call one local API instead of each app installing and managing separate Claude, Codex, ChatGPT, credentials, and wrapper code.
 
-The current implementation is a Fastify API container with persistent provider profiles, editable runtime settings, model aliases, explicit fallback, file-backed conversations, local asset storage, an admin WebUI, and an experimental ChatGPT browser worker for image generation.
+The current implementation is a Fastify API container with persistent provider profiles, editable runtime settings, model aliases, explicit fallback, file-backed conversations, local asset storage, an admin WebUI, a local Ollama sidecar, and an experimental ChatGPT browser worker for image generation.
 
 ## Deployment Topology
 
@@ -23,6 +23,7 @@ flowchart LR
       Settings["Runtime settings\n/app/data/settings.json"]
       Conversations["Conversation store\n/app/data/conversations"]
       Assets["Asset store\n/app/data/assets"]
+      OllamaData["Ollama model store\n/app/data/ollama"]
     end
 
     WebUI["Admin WebUI + /v1 proxy\n0.0.0.0:18089"]
@@ -30,6 +31,7 @@ flowchart LR
     subgraph Workers["Provider workers"]
       Claude["Claude CLI worker\nclaude-1"]
       Codex["Codex CLI worker\ncodex-1"]
+      Ollama["Ollama HTTP worker\nollama-local"]
       ChatGPT["ChatGPT browser worker\nexperimental image route"]
     end
 
@@ -44,9 +46,11 @@ flowchart LR
   LLMHQ --> Settings
   LLMHQ --> Conversations
   LLMHQ --> Assets
+  Ollama --> OllamaData
   WebUI -->|"private HTTP http://llmhq:8080"| LLMHQ
   LLMHQ --> Claude
   LLMHQ --> Codex
+  LLMHQ -->|"HTTP http://ollama:11434/api/chat"| Ollama
   LLMHQ --> ChatGPT
   NoVNC -. "manual Google login" .-> ChatGPT
 ```
@@ -89,6 +93,8 @@ flowchart TD
   Models --> Opus["claude-opus\nchat, vision, deep_reasoning"]
   Models --> Codex["codex-gpt-5.5\nchat, code"]
   Models --> CodexVision["codex-gpt-5.5-vision\nchat, vision, image_input"]
+  Models --> Ollama["ollama-llama3.2\nchat, local, private"]
+  Models --> OllamaCoder["ollama-qwen2.5-coder\nchat, code, local, private\noptional"]
   Models --> Image["chatgpt-image-browser\nimage_generate, image_edit_experimental"]
 
   Haiku -->|"fallback"| Sonnet
@@ -97,14 +103,18 @@ flowchart TD
   Opus -->|"fallback"| Sonnet
   Opus -->|"fallback"| Codex
   Codex -->|"fallback"| Sonnet
+  Ollama -->|"fallback"| Sonnet
+  OllamaCoder -->|"fallback"| Codex
+  OllamaCoder -->|"fallback"| Sonnet
 ```
 
-Apps select the model explicitly. Codex text/code, Codex vision input, and ChatGPT image output are separate aliases in the runtime settings catalog even when two aliases share the same provider account. If a selected model fails, LLMHQ reports the failure in `attempts` and then uses the configured default fallback unless the request disables fallback with `fallback: "none"` or `fallback: false`.
+Apps select the model explicitly. Codex text/code, Codex vision input, Ollama local text, and ChatGPT image output are separate aliases in the runtime settings catalog even when aliases share a provider account or endpoint. If a selected model fails, LLMHQ reports the failure in `attempts` and then uses the configured default fallback unless the request disables fallback with `fallback: "none"` or `fallback: false`.
 
 Runtime model settings are stored in `LLMHQ_SETTINGS_FILE`, defaulting to `./data/settings.json`. The admin WebUI can edit:
 
 - default chat model
 - Claude and Codex worker profile directories
+- Ollama worker base URLs
 - model aliases
 - provider-native CLI model names
 - model capabilities metadata
@@ -173,6 +183,7 @@ Persistent provider state lives under `./data` on the host and is mounted into t
 | --- | --- |
 | Claude | `/app/data/profiles/claude-1` |
 | Codex | `/app/data/profiles/codex-1` |
+| Ollama | `/app/data/ollama` for model files, worker endpoint `http://ollama:11434` |
 | ChatGPT browser | `/app/data/browser-profiles/chatgpt-main` |
 
 These profiles hold CLI/browser login state. LLMHQ does not store Google passwords.
@@ -180,6 +191,7 @@ These profiles hold CLI/browser login state. LLMHQ does not store Google passwor
 ## Operational Constraints
 
 - Claude and Codex depend on official CLI login state. If a provider logs out, that provider fails and LLMHQ reports it.
+- Ollama does not need external login, but selected native models must be pulled into the `llmhq-ollama` model store before the corresponding LLMHQ alias can answer.
 - The ChatGPT image worker is experimental because it automates the ChatGPT web UI. UI changes, captcha, rate limits, or logout can break it.
 - The API reports the actual `used_model`, `used_worker`, `fallback_used`, `fallback_reason`, and `attempts` so product apps can surface provider failures instead of hiding them.
 - Same-server latency is mostly local HTTP overhead plus provider execution time. It avoids reinstalling provider CLIs in every product app.

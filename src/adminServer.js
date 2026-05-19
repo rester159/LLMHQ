@@ -1054,7 +1054,11 @@ function adminHtml({ apiBaseUrl }) {
           statusBadge(worker.status),
           worker.command ? code(worker.command) : '<span class="hint">browser</span>',
           tokens(worker.capabilities),
-          worker.profileDir ? '<div class="mono-line">' + code(worker.profileDir) + '</div>' : '<span class="hint">not set</span>'
+          worker.profileDir
+            ? '<div class="mono-line">' + code(worker.profileDir) + '</div>'
+            : worker.baseUrl
+              ? '<div class="mono-line">' + code(worker.baseUrl) + '</div>'
+              : '<span class="hint">not set</span>'
         ]));
       }
     }
@@ -1065,7 +1069,7 @@ function adminHtml({ apiBaseUrl }) {
         workerEditorEl.innerHTML = '<div class="empty">No editable worker settings returned.</div>';
         return;
       }
-      for (const provider of ["claude", "codex"]) {
+      for (const provider of ["claude", "codex", "ollama"]) {
         const workers = Array.isArray(settings.workers[provider]) ? settings.workers[provider] : [];
         const group = document.createElement("div");
         group.className = "worker-group";
@@ -1080,11 +1084,13 @@ function adminHtml({ apiBaseUrl }) {
           list.innerHTML = '<div class="empty">No ' + escapeHtml(provider) + ' workers configured.</div>';
         } else {
           workers.forEach((worker, index) => {
+            const endpointField = provider === "ollama" ? "baseUrl" : "profileDir";
+            const endpointLabel = provider === "ollama" ? "base URL" : "profile directory";
             const row = document.createElement("div");
             row.className = "worker-row";
             row.innerHTML =
               '<input data-provider="' + escapeHtml(provider) + '" data-index="' + index + '" data-field="id" aria-label="' + escapeHtml(provider) + ' worker id" value="' + escapeAttribute(worker.id || "") + '">' +
-              '<input data-provider="' + escapeHtml(provider) + '" data-index="' + index + '" data-field="profileDir" aria-label="' + escapeHtml(provider) + ' profile directory" value="' + escapeAttribute(worker.profileDir || "") + '">' +
+              '<input data-provider="' + escapeHtml(provider) + '" data-index="' + index + '" data-field="' + endpointField + '" aria-label="' + escapeHtml(provider) + ' ' + endpointLabel + '" value="' + escapeAttribute(worker[endpointField] || "") + '">' +
               '<button class="icon-button danger" type="button" data-worker-action="remove" data-provider="' + escapeHtml(provider) + '" data-index="' + index + '" title="Remove worker">x</button>';
             list.append(row);
           });
@@ -1127,10 +1133,14 @@ function adminHtml({ apiBaseUrl }) {
       settings.workers[provider] = Array.isArray(settings.workers[provider]) ? settings.workers[provider] : [];
       if (action === "add") {
         const nextNumber = settings.workers[provider].length + 1;
-        settings.workers[provider].push({
-          id: provider + "-" + nextNumber,
-          profileDir: defaultProfileDir(settings.workers[provider], provider, nextNumber),
-        });
+        settings.workers[provider].push(
+          provider === "ollama"
+            ? { id: provider + "-" + nextNumber, baseUrl: "http://ollama:11434" }
+            : {
+                id: provider + "-" + nextNumber,
+                profileDir: defaultProfileDir(settings.workers[provider], provider, nextNumber),
+              },
+        );
       } else if (action === "remove") {
         const index = Number.parseInt(event.target.dataset.index, 10);
         settings.workers[provider].splice(index, 1);

@@ -3,6 +3,7 @@
 LLMHQ is a private local gateway for shared LLM access across apps running on the same Unraid/server host.
 
 This first slice implements a local chat/coding gateway for Claude Code and Codex CLI workers, plus an experimental ChatGPT image-generation route as a browser-backed worker. The browser route is intentionally marked experimental because it depends on the ChatGPT web UI session staying logged in and the UI remaining automatable.
+It also includes an Ollama sidecar so local models can be called through the same `/v1/chat/completions` API.
 
 ## What Is Implemented
 
@@ -15,6 +16,7 @@ This first slice implements a local chat/coding gateway for Claude Code and Code
 - `GET /v1/assets/:assetId` serves generated assets from local disk.
 - `GET /health` reports gateway instance identity and worker health.
 - `GET /admin` serves the server admin WebUI.
+- Ollama runs as the `llmhq-ollama` Compose service and exposes local model aliases such as `ollama-llama3.2`.
 - Bearer API keys gate requests by default. Configure keys with `LLMHQ_API_KEYS`.
 - Same-server deployments can set `LLMHQ_AUTH_MODE=none` when LLMHQ is bound only to localhost or a private Docker network.
 - The real ChatGPT browser worker is disabled unless `LLMHQ_EXPERIMENTAL_CHATGPT_BROWSER=1`.
@@ -23,6 +25,7 @@ This first slice implements a local chat/coding gateway for Claude Code and Code
 
 - [API documentation](docs/api-documentation.md)
 - [Workspaces API contract](docs/workspaces.md)
+- [Planning API documentation](planning/api-documentation.md)
 - [Technical architecture](planning/technical-architecture.md)
 - [Product requirements](planning/prd.md)
 - [App refactoring prompt](docs/refactoring-prompt.md)
@@ -72,6 +75,7 @@ For Unraid/container setup, the practical flow is:
 
 ```powershell
 docker compose up -d --build
+docker compose exec llmhq npm run ollama:pull -- llama3.2
 docker compose exec llmhq npm run login:claude -- claude-1
 docker compose exec llmhq npm run login:codex -- codex-1
 docker compose exec llmhq npm run login:chatgpt:vnc
@@ -139,10 +143,29 @@ Available v1 chat model aliases:
 - `claude-opus`
 - `codex-gpt-5.5`
 - `codex-gpt-5.5-vision`
+- `ollama-llama3.2`
 
 Fallback is explicit. If `claude-opus` fails and `claude-sonnet` succeeds, the response includes `requested_model`, `used_model`, `llmhq`, `fallback_used`, `fallback_reason`, and `attempts`.
 
-Use `codex-gpt-5.5` for Codex text/code turns. Use `codex-gpt-5.5-vision` for Codex image-input turns that include `image_url` message parts pointing at local image paths. Use `chatgpt-image-browser` through `/v1/images/generations` for image output.
+Use `codex-gpt-5.5` for Codex text/code turns. Use `codex-gpt-5.5-vision` for Codex image-input turns that include `image_url` message parts pointing at local image paths. Use `ollama-llama3.2` for local/private Ollama text turns after pulling the native `llama3.2` model. Use `chatgpt-image-browser` through `/v1/images/generations` for image output.
+
+Example local Ollama call:
+
+```powershell
+$body = @{
+  model = "ollama-llama3.2"
+  fallback = "default"
+  messages = @(
+    @{ role = "user"; content = "Reply with exactly LLMHQ Ollama ok." }
+  )
+} | ConvertTo-Json -Depth 5
+
+Invoke-RestMethod `
+  -Method Post `
+  -Uri http://127.0.0.1:18088/v1/chat/completions `
+  -ContentType "application/json" `
+  -Body $body
+```
 
 For live "current action" UI, send `stream = $true` and `status_events = $true`. LLMHQ will emit named SSE `status` events with generic fields like `stage`, `message`, `model`, `worker`, and `created` before the final assistant chunk.
 
@@ -254,6 +277,7 @@ Invoke-RestMethod `
 - The default Compose setup also publishes a host-local port as `http://127.0.0.1:18088`; it is bound to loopback and is not exposed to the LAN.
 - The default Compose setup publishes the admin WebUI on `http://<server-ip>:18089/admin`, proxies `/v1/*` through the same port for deliberate LAN validation, and adds the Unraid `net.unraid.docker.webui` label.
 - Runtime model aliases, provider profile directories, provider-native model arguments, default model, and fallback chains are stored in `./data/settings.json` by default and can be edited through the admin WebUI.
+- Ollama model files live under `${LLMHQ_OLLAMA_DATA_DIR:-./data/ollama}` and are not committed. Pull models with `docker compose exec llmhq npm run ollama:pull -- llama3.2`.
 - The admin WebUI includes Provider Login for Claude and Codex device auth, plus Provider Probe for visible provider-session checks. Provider Probe sends a minimal request per provider and exposes `auth_required` as an LLMHQ/provider-session problem before product apps hit it.
 - Provider failure responses include `retryable`, `auth_status`, and sanitized `diagnostic` fields so product apps can report provider account problems accurately instead of treating them as payload format errors.
 - If a provider worker fails with sticky state such as `auth_required`, LLMHQ marks that worker unavailable briefly and skips other aliases using the same failure domain so fallback can reach a different provider faster. Downstream apps should log `llmhq.instance_id` and `attempts[].failure_domain` so app failures can be matched to the exact LLMHQ process and provider profile that served them.
@@ -271,6 +295,7 @@ Invoke-RestMethod `
 ```powershell
 docker compose build
 docker compose up -d
+docker compose exec llmhq npm run ollama:pull -- llama3.2
 docker compose logs -f llmhq
 ```
 

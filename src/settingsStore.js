@@ -48,6 +48,25 @@ const MODEL_DEFAULTS = {
     fallback: [],
     output: ["text"],
   },
+  "ollama-llama3.2": {
+    kind: "chat",
+    provider: "ollama",
+    cliModelKey: "defaultModel",
+    cliModel: "llama3.2",
+    capabilities: ["chat", "local", "private"],
+    fallback: ["claude-sonnet"],
+    output: ["text"],
+  },
+  "ollama-qwen2.5-coder": {
+    enabled: false,
+    kind: "chat",
+    provider: "ollama",
+    cliModelKey: "coderModel",
+    cliModel: "qwen2.5-coder:7b",
+    capabilities: ["chat", "code", "local", "private"],
+    fallback: ["codex-gpt-5.5", "claude-sonnet"],
+    output: ["text"],
+  },
   "chatgpt-image-browser": {
     kind: "image",
     provider: "chatgpt-browser",
@@ -57,7 +76,7 @@ const MODEL_DEFAULTS = {
   },
 };
 
-const PROVIDERS = new Set(["claude", "codex", "chatgpt-browser"]);
+const PROVIDERS = new Set(["claude", "codex", "ollama", "chatgpt-browser"]);
 const MODEL_KINDS = new Set(["chat", "image"]);
 
 export class SettingsStore {
@@ -103,6 +122,7 @@ export class SettingsStore {
 export function defaultRuntimeSettings(config) {
   const claudeEnabled = Boolean(config.claude?.enabled);
   const codexEnabled = Boolean(config.codex?.enabled);
+  const ollamaEnabled = Boolean(config.ollama?.enabled);
   const chatgptBrowserEnabled = Boolean(config.chatgpt?.enabled);
   const models = {};
 
@@ -112,17 +132,26 @@ export function defaultRuntimeSettings(config) {
         ? claudeEnabled
         : defaults.provider === "codex"
           ? codexEnabled
-          : chatgptBrowserEnabled;
-    const providerConfig = defaults.provider === "claude" ? config.claude : defaults.provider === "codex" ? config.codex : {};
+          : defaults.provider === "ollama"
+            ? ollamaEnabled
+            : chatgptBrowserEnabled;
+    const providerConfig =
+      defaults.provider === "claude"
+        ? config.claude
+        : defaults.provider === "codex"
+          ? config.codex
+          : defaults.provider === "ollama"
+            ? config.ollama
+            : {};
     const configuredCliModel =
       defaults.provider === "claude"
         ? providerConfig?.models?.[defaults.cliModelKey]
-        : defaults.provider === "codex"
+        : defaults.provider === "codex" || defaults.provider === "ollama"
           ? providerConfig?.[defaults.cliModelKey]
           : null;
 
     models[id] = {
-      enabled: providerEnabled,
+      enabled: defaults.enabled === false ? false : providerEnabled,
       kind: defaults.kind,
       provider: defaults.provider,
       ...(defaults.kind === "chat" ? { cliModel: configuredCliModel || defaults.cliModel } : {}),
@@ -132,6 +161,10 @@ export function defaultRuntimeSettings(config) {
     };
   }
 
+  for (const model of Object.values(models)) {
+    model.fallback = model.fallback.filter((fallbackId) => models[fallbackId]?.enabled);
+  }
+
   return normalizeSettings(
     {
       version: 1,
@@ -139,6 +172,12 @@ export function defaultRuntimeSettings(config) {
       workers: {
         claude: config.claude?.workers || [],
         codex: config.codex?.workers || [],
+        ollama:
+          config.ollama?.workers?.length
+            ? config.ollama.workers
+            : config.ollama?.enabled
+              ? [{ id: "ollama-local", baseUrl: config.ollama.baseUrl }]
+              : [],
       },
       models,
     },
@@ -168,6 +207,7 @@ function normalizeWorkers(workers, baseDir) {
   return {
     claude: normalizeWorkerList(workers.claude, baseDir),
     codex: normalizeWorkerList(workers.codex, baseDir),
+    ollama: normalizeEndpointWorkerList(workers.ollama),
   };
 }
 
@@ -199,6 +239,34 @@ function normalizeWorkerList(value, baseDir) {
   });
 }
 
+function normalizeEndpointWorkerList(value) {
+  if (value == null) {
+    return [];
+  }
+  if (!Array.isArray(value)) {
+    throw new ProviderError("invalid_request", "worker lists must be arrays.");
+  }
+
+  const seen = new Set();
+  return value.map((worker, index) => {
+    if (!worker || typeof worker !== "object" || Array.isArray(worker)) {
+      throw new ProviderError("invalid_request", `worker at index ${index} must be an object.`);
+    }
+    const id = String(worker.id || "").trim();
+    if (!id) {
+      throw new ProviderError("invalid_request", `worker at index ${index} is missing id.`);
+    }
+    if (seen.has(id)) {
+      throw new ProviderError("invalid_request", `duplicate worker id: ${id}`);
+    }
+    seen.add(id);
+    return {
+      id,
+      baseUrl: String(worker.baseUrl || "http://127.0.0.1:11434").replace(/\/+$/, ""),
+    };
+  });
+}
+
 function normalizeModels(models) {
   if (!models || typeof models !== "object" || Array.isArray(models)) {
     throw new ProviderError("invalid_request", "models must be an object keyed by alias.");
@@ -225,7 +293,7 @@ function normalizeModels(models) {
     if (provider === "chatgpt-browser" && kind !== "image") {
       throw new ProviderError("invalid_request", `${id} uses chatgpt-browser but is not an image model.`);
     }
-    if ((provider === "claude" || provider === "codex") && kind !== "chat") {
+    if ((provider === "claude" || provider === "codex" || provider === "ollama") && kind !== "chat") {
       throw new ProviderError("invalid_request", `${id} uses ${provider} but is not a chat model.`);
     }
 
@@ -301,6 +369,7 @@ function resolveDefault(value) {
 
 function mergeMissingDefaults(settings, defaults) {
   let changed = false;
+  const providersBeforeMerge = new Set(Object.values(settings.models || {}).map((model) => model.provider));
   const models = { ...settings.models };
   for (const [id, model] of Object.entries(defaults.models || {})) {
     if (!models[id]) {
@@ -321,10 +390,24 @@ function mergeMissingDefaults(settings, defaults) {
     }
   }
 
+  const workers = { ...settings.workers };
+  for (const [provider, providerWorkers] of Object.entries(defaults.workers || {})) {
+    if (!Array.isArray(providerWorkers) || providerWorkers.length === 0) {
+      continue;
+    }
+    const enabledProviderModels = Object.values(models).filter((model) => model.enabled && model.provider === provider);
+    const providerWasIntroduced = enabledProviderModels.length > 0 && !providersBeforeMerge.has(provider);
+    if (providerWasIntroduced && (!Array.isArray(workers[provider]) || workers[provider].length === 0)) {
+      workers[provider] = providerWorkers;
+      changed = true;
+    }
+  }
+
   return {
     changed,
     settings: {
       ...settings,
+      workers,
       models,
     },
   };

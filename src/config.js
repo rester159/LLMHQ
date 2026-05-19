@@ -62,6 +62,17 @@ export function loadConfig(env = process.env) {
       workers: parseWorkerSpecs(mergedEnv.LLMHQ_CODEX_WORKERS, rootDir),
       model: mergedEnv.LLMHQ_CODEX_MODEL || "gpt-5.5",
     },
+    ollama: {
+      enabled: boolFromEnv(mergedEnv.LLMHQ_OLLAMA_ENABLED, false),
+      baseUrl: mergedEnv.LLMHQ_OLLAMA_BASE_URL || "http://127.0.0.1:11434",
+      timeoutMs: intFromEnv(
+        mergedEnv.LLMHQ_OLLAMA_TIMEOUT_MS,
+        intFromEnv(mergedEnv.LLMHQ_CHAT_TIMEOUT_MS, 180000),
+      ),
+      workers: parseEndpointWorkerSpecs(mergedEnv.LLMHQ_OLLAMA_WORKERS, mergedEnv.LLMHQ_OLLAMA_BASE_URL || "http://127.0.0.1:11434"),
+      defaultModel: mergedEnv.LLMHQ_OLLAMA_DEFAULT_MODEL || "llama3.2",
+      coderModel: mergedEnv.LLMHQ_OLLAMA_CODER_MODEL || "qwen2.5-coder:7b",
+    },
     chatgpt: {
       enabled: boolFromEnv(mergedEnv.LLMHQ_EXPERIMENTAL_CHATGPT_BROWSER, false),
       profileDir: path.resolve(
@@ -139,6 +150,24 @@ function parseWorkerSpecs(value, rootDir) {
       return {
         id,
         profileDir: profileDir ? path.resolve(rootDir, profileDir) : null,
+      };
+    });
+}
+
+function parseEndpointWorkerSpecs(value, defaultBaseUrl) {
+  if (!value) {
+    return [];
+  }
+
+  return value
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .map((entry) => {
+      const [id, baseUrl] = entry.split("=").map((part) => part.trim());
+      return {
+        id,
+        baseUrl: baseUrl || defaultBaseUrl,
       };
     });
 }

@@ -12,6 +12,7 @@ import { buildProxyApp } from "../src/proxyApp.js";
 import { classifyCliFailure } from "../src/providers/cliProcess.js";
 import { FakeChatWorker } from "../src/providers/fakeChatWorker.js";
 import { FakeImageWorker } from "../src/providers/fakeImageWorker.js";
+import { OllamaChatWorker } from "../src/providers/ollamaChatWorker.js";
 import { createModelRegistry } from "../src/registry.js";
 
 function testConfig(assetDir) {
@@ -1287,6 +1288,139 @@ test("models endpoint lists discrete text vision and image model aliases", async
   assert.deepEqual(models.get("codex-gpt-5.5-vision").capabilities, ["chat", "vision", "image_input"]);
   assert.equal(models.get("chatgpt-image-browser").kind, "image");
   assert.deepEqual(models.get("chatgpt-image-browser").output, ["image"]);
+});
+
+test("ollama worker calls the local Ollama chat API", async () => {
+  let captured = null;
+  const worker = new OllamaChatWorker({
+    id: "ollama-test",
+    baseUrl: "http://ollama:11434",
+    timeoutMs: 1000,
+    fetchImpl: async (url, options = {}) => {
+      captured = {
+        url,
+        body: JSON.parse(options.body),
+      };
+      return {
+        ok: true,
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            model: "llama3.2",
+            message: { role: "assistant", content: "local ollama ok" },
+            total_duration: 123,
+            eval_count: 4,
+          }),
+      };
+    },
+  });
+
+  const result = await worker.generateChat({
+    model: { id: "ollama-llama3.2", cliModel: "llama3.2" },
+    messages: [{ role: "user", content: "hello local model" }],
+    temperature: 0.1,
+    maxTokens: 20,
+  });
+
+  assert.equal(captured.url, "http://ollama:11434/api/chat");
+  assert.equal(captured.body.model, "llama3.2");
+  assert.equal(captured.body.stream, false);
+  assert.deepEqual(captured.body.options, { temperature: 0.1, num_predict: 20 });
+  assert.deepEqual(captured.body.messages, [{ role: "user", content: "hello local model" }]);
+  assert.equal(result.content, "local ollama ok");
+  assert.equal(result.providerMetadata.provider, "ollama");
+});
+
+test("runtime settings expose Ollama model aliases when Ollama is enabled", async () => {
+  const assetDir = path.join(os.tmpdir(), `llmhq-test-${Date.now()}-ollama-settings`);
+  const config = runtimeConfig(assetDir);
+  config.ollama = {
+    enabled: true,
+    baseUrl: "http://ollama:11434",
+    timeoutMs: 1000,
+    workers: [{ id: "ollama-local", baseUrl: "http://ollama:11434" }],
+    defaultModel: "llama3.2",
+    coderModel: "qwen2.5-coder:7b",
+  };
+  const app = await buildApp({
+    fastify: Fastify(),
+    config,
+    assetStore: new AssetStore(assetDir),
+  });
+
+  const settingsResponse = await app.inject({ method: "GET", url: "/admin/settings" });
+  assert.equal(settingsResponse.statusCode, 200);
+  const settings = settingsResponse.json().settings;
+  assert.equal(settings.workers.ollama[0].id, "ollama-local");
+  assert.equal(settings.workers.ollama[0].baseUrl, "http://ollama:11434");
+  assert.equal(settings.models["ollama-llama3.2"].enabled, true);
+  assert.equal(settings.models["ollama-llama3.2"].provider, "ollama");
+  assert.equal(settings.models["ollama-llama3.2"].cliModel, "llama3.2");
+  assert.equal(settings.models["ollama-qwen2.5-coder"].enabled, false);
+
+  const modelsResponse = await app.inject({ method: "GET", url: "/v1/models" });
+  assert.equal(modelsResponse.statusCode, 200);
+  const models = new Map(modelsResponse.json().data.map((model) => [model.id, model]));
+  assert.equal(models.get("ollama-llama3.2").provider, "ollama");
+  assert.deepEqual(models.get("ollama-llama3.2").capabilities, ["chat", "local", "private"]);
+});
+
+test("existing settings files add the default Ollama worker when Ollama aliases are introduced", async () => {
+  const assetDir = path.join(os.tmpdir(), `llmhq-test-${Date.now()}-ollama-worker-migration`);
+  await fs.mkdir(assetDir, { recursive: true });
+  await fs.writeFile(
+    path.join(assetDir, "settings.json"),
+    JSON.stringify(
+      {
+        version: 1,
+        defaultModel: "claude-sonnet",
+        workers: {
+          claude: [{ id: "claude-1", profileDir: path.join(assetDir, "profiles", "claude-1") }],
+          codex: [{ id: "codex-1", profileDir: path.join(assetDir, "profiles", "codex-1") }],
+        },
+        models: {
+          "claude-sonnet": {
+            enabled: true,
+            kind: "chat",
+            provider: "claude",
+            cliModel: "sonnet",
+            capabilities: ["chat", "vision", "smart"],
+            output: ["text"],
+            fallback: [],
+          },
+        },
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+
+  const config = runtimeConfig(assetDir);
+  config.ollama = {
+    enabled: true,
+    baseUrl: "http://ollama:11434",
+    timeoutMs: 1000,
+    workers: [{ id: "ollama-local", baseUrl: "http://ollama:11434" }],
+    defaultModel: "llama3.2",
+    coderModel: "qwen2.5-coder:7b",
+  };
+
+  const app = await buildApp({
+    fastify: Fastify(),
+    config,
+    assetStore: new AssetStore(assetDir),
+  });
+
+  const response = await app.inject({ method: "GET", url: "/admin/settings" });
+  assert.equal(response.statusCode, 200);
+  assert.deepEqual(response.json().settings.workers.ollama, [
+    { id: "ollama-local", baseUrl: "http://ollama:11434" },
+  ]);
+
+  const persisted = JSON.parse(await fs.readFile(path.join(assetDir, "settings.json"), "utf8"));
+  assert.deepEqual(persisted.workers.ollama, [{ id: "ollama-local", baseUrl: "http://ollama:11434" }]);
+  assert.equal(persisted.models["ollama-llama3.2"].provider, "ollama");
 });
 
 test("admin provider probe reports provider usability without changing app payload contract", async () => {

@@ -30,7 +30,8 @@
     "login:chatgpt": "node scripts/chatgpt-login.js",
     "login:chatgpt:vnc": "bash scripts/chatgpt-login-vnc.sh",
     "login:claude": "node scripts/cli-login.js claude",
-    "login:codex": "node scripts/cli-login.js codex"
+    "login:codex": "node scripts/cli-login.js codex",
+    "ollama:pull": "node scripts/ollama-pull.js"
   },
   "dependencies": {
     "fastify": "^5.8.5",

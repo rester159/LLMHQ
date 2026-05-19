@@ -2,7 +2,7 @@
 
 ## Summary
 
-LLMHQ is a private local gateway that centralizes LLM access for apps running on the same server. It gives each app a stable API contract while keeping provider CLIs, login profiles, fallback behavior, chat history, and generated assets in one managed service.
+LLMHQ is a private local gateway that centralizes LLM access for apps running on the same server. It gives each app a stable API contract while keeping provider CLIs, local Ollama models, login profiles, fallback behavior, chat history, and generated assets in one managed service.
 
 ## Problem
 
@@ -22,6 +22,7 @@ This creates operational drift, brittle setup, and duplicated maintenance.
 - Let apps select a model explicitly while preserving a default fallback chain.
 - Store conversation history centrally when apps do not want to manage it themselves.
 - Keep provider login state persistent in one server-side data directory.
+- Provide a local-model path through Ollama for private/offline-friendly text generation.
 - Keep the service private to the host or Docker network by default.
 - Return enough metadata for apps to know when fallback happened.
 
@@ -50,6 +51,7 @@ This creates operational drift, brittle setup, and duplicated maintenance.
 | Default fallback | Implemented. |
 | Claude CLI worker | Implemented with persistent profile. |
 | Codex CLI worker | Implemented with persistent profile. |
+| Ollama worker | Implemented through the local `llmhq-ollama` service and `/api/chat`. |
 | ChatGPT browser image worker | Implemented as experimental. |
 | Local generated assets | Implemented through `/v1/assets/:assetId`. |
 | Same-server auth-free mode | Implemented with `LLMHQ_AUTH_MODE=none`. |
@@ -86,6 +88,8 @@ Apps must be able to select one of the supported model aliases:
 - `claude-opus`
 - `codex-gpt-5.5`
 - `codex-gpt-5.5-vision`
+- `ollama-llama3.2`
+- `ollama-qwen2.5-coder` when enabled in runtime settings and pulled in Ollama
 - `chatgpt-image-browser` for image generation only
 
 If `model` is omitted for chat, the service uses `LLMHQ_DEFAULT_CHAT_MODEL`, currently `claude-sonnet`.
@@ -100,6 +104,8 @@ Default behavior:
 - `claude-sonnet` falls back to `codex-gpt-5.5`.
 - `claude-opus` falls back to `claude-sonnet`, then `codex-gpt-5.5`.
 - `codex-gpt-5.5` falls back to `claude-sonnet`.
+- `ollama-llama3.2` falls back to `claude-sonnet`.
+- `ollama-qwen2.5-coder` falls back to `codex-gpt-5.5`, then `claude-sonnet`.
 
 Apps may disable fallback with:
 
@@ -186,6 +192,7 @@ Default Compose behavior:
 - Bind the host-local API to `127.0.0.1:18088` in the default Compose deployment.
 - Attach the service to private Docker network `llmhq_private`.
 - Let same-network product containers use `http://llmhq:8080`.
+- Run Ollama as `llmhq-ollama` on the same private Docker network and route LLMHQ to `http://ollama:11434`.
 - Expose noVNC login helper only on `127.0.0.1:7900`.
 
 ## Security Requirements
@@ -202,6 +209,7 @@ Default Compose behavior:
 - Every successful response after a fallback must identify the original requested model and the final used model.
 - Every failed response should include provider attempts where possible.
 - CLI/browser profiles must be persistent across container restarts.
+- Ollama model files must persist under the configured Ollama data directory.
 - Docker service should use `restart: unless-stopped`.
 
 ## Performance Requirements
@@ -212,10 +220,11 @@ Default Compose behavior:
 
 ## Acceptance Criteria
 
-- `GET /health` returns `status: "ok"` and lists Claude, Codex, and configured ChatGPT image worker.
+- `GET /health` returns `status: "ok"` and lists Claude, Codex, Ollama, and configured ChatGPT image worker.
 - `GET /v1/models` returns all model aliases and fallback chains.
 - A stateless chat request to `claude-sonnet` returns a valid chat completion.
 - A stateless chat request to `codex-gpt-5.5` returns a valid chat completion.
+- A stateless chat request to `ollama-llama3.2` returns a valid chat completion after `llama3.2` has been pulled.
 - A stateful request to `/v1/conversations/messages` creates or reuses a conversation and appends the turn.
 - `GET /v1/conversations?project_id=...` returns stored conversations for that project.
 - An image request either returns a stored asset or returns a clear provider error such as `auth_required`.

@@ -471,6 +471,7 @@ function createRuntimeRegistry(config, settings) {
     enableFake: process.env.NODE_ENV === "test",
     claude: config.claude,
     codex: config.codex,
+    ollama: config.ollama,
     settings,
     fakeChatModels:
       process.env.NODE_ENV === "test"
@@ -914,6 +915,7 @@ function providerErrorRetryable(error) {
     error.code === "auth_required" ||
     error.code === "invalid_request" ||
     error.code === "unknown_model" ||
+    error.code === "model_not_installed" ||
     error.code === "workspace_not_found" ||
     error.code === "workspace_permission_denied" ||
     error.code === "workspace_provider_denied"

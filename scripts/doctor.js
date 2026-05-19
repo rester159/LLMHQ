@@ -22,6 +22,16 @@ if (config.codex.enabled) {
   console.log(`codex workers=${config.codex.workers.map((worker) => worker.id).join(", ") || "codex-local"}`);
 }
 
+if (config.ollama.enabled) {
+  await checkOllama(config.ollama.baseUrl);
+  console.log(
+    `ollama workers=${
+      config.ollama.workers.map((worker) => `${worker.id}=${worker.baseUrl}`).join(", ") ||
+      `ollama-local=${config.ollama.baseUrl}`
+    }`,
+  );
+}
+
 if (config.chatgpt.enabled) {
   await checkDirectory("chatgptProfile", config.chatgpt.profileDir);
   console.log("chatgpt browser worker=enabled");
@@ -44,5 +54,19 @@ async function checkCommand(label, command, args) {
     if (error.details?.output) {
       console.log(error.details.output);
     }
+  }
+}
+
+async function checkOllama(baseUrl) {
+  try {
+    const response = await fetch(`${String(baseUrl).replace(/\/+$/, "")}/api/version`);
+    if (!response.ok) {
+      console.log(`ollama=failed HTTP ${response.status}`);
+      return;
+    }
+    const version = await response.json();
+    console.log(`ollama=ok ${version.version || "version unknown"}`);
+  } catch (error) {
+    console.log(`ollama=failed ${error.message}`);
   }
 }

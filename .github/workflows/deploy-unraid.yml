@@ -77,7 +77,8 @@ jobs:
           if [ -f "${base}/.env" ]; then
             compose_env_args=(--env-file "${base}/.env")
           fi
-          LLMHQ_DATA_DIR="${base}/data" docker compose "${compose_env_args[@]}" -p llmhq -f "${base}/source/compose.yaml" up -d --build llmhq webui network-sync
+          LLMHQ_DATA_DIR="${base}/data" docker compose "${compose_env_args[@]}" -p llmhq -f "${base}/source/compose.yaml" up -d --build ollama llmhq webui network-sync
+          docker exec llmhq sh -lc 'npm run ollama:pull -- "${LLMHQ_OLLAMA_DEFAULT_MODEL:-llama3.2}"'
           host_port="${LLMHQ_HOST_PORT:-18088}"
           webui_port="${LLMHQ_WEBUI_PORT:-18089}"
           host_probe_image="$(docker inspect -f '{{.Config.Image}}' llmhq)"

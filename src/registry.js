@@ -1,6 +1,7 @@
 import { ProviderError } from "./errors.js";
 import { ClaudeCliChatWorker } from "./providers/claudeCliChatWorker.js";
 import { CodexCliChatWorker } from "./providers/codexCliChatWorker.js";
+import { OllamaChatWorker } from "./providers/ollamaChatWorker.js";
 
 export function createModelRegistry({
   chatgptWorker,
@@ -8,6 +9,7 @@ export function createModelRegistry({
   enableFake = false,
   claude = null,
   codex = null,
+  ollama = null,
   fakeChatModels = null,
   settings = null,
 }) {
@@ -51,7 +53,7 @@ export function createModelRegistry({
   }
 
   if (settings) {
-    addSettingsModels(models, settings, { claude, codex, chatgptWorker });
+    addSettingsModels(models, settings, { claude, codex, ollama, chatgptWorker });
   } else if (claude?.enabled) {
     const workers = buildClaudeWorkers(claude);
     addChatModel(models, "claude-haiku", workers, claude.models.haiku, ["claude-sonnet", "codex-gpt-5.5"], [
@@ -80,6 +82,15 @@ export function createModelRegistry({
     ]);
   }
 
+  if (!settings && ollama?.enabled) {
+    const workers = buildOllamaWorkers(ollama);
+    addChatModel(models, "ollama-llama3.2", workers, ollama.defaultModel, ["claude-sonnet"], [
+      "chat",
+      "local",
+      "private",
+    ], "ollama");
+  }
+
   return {
     models,
 
@@ -95,7 +106,10 @@ export function createModelRegistry({
       if (kind === "chat" && settings?.defaultModel && models.has(settings.defaultModel)) {
         return settings.defaultModel;
       }
-      const preferred = kind === "chat" ? ["claude-sonnet", "codex-gpt-5.5"] : ["chatgpt-image-browser", "fake-image"];
+      const preferred =
+        kind === "chat"
+          ? ["claude-sonnet", "codex-gpt-5.5", "ollama-llama3.2"]
+          : ["chatgpt-image-browser", "fake-image"];
       for (const id of preferred) {
         if (models.has(id)) {
           return id;
@@ -180,12 +194,31 @@ function getProviderWorkers(cache, provider, settings, providerConfig) {
       workdir: providerConfig.codex?.workdir || process.cwd(),
       workers: settings.workers?.codex || providerConfig.codex?.workers || [],
     });
+  } else if (provider === "ollama") {
+    workers = buildOllamaWorkers({
+      ...(providerConfig.ollama || {}),
+      baseUrl: providerConfig.ollama?.baseUrl || "http://127.0.0.1:11434",
+      timeoutMs: providerConfig.ollama?.timeoutMs || 180000,
+      workers: settings.workers?.ollama || providerConfig.ollama?.workers || [],
+    });
   } else {
     throw new ProviderError("invalid_request", `Unsupported provider: ${provider}`);
   }
 
   cache.set(provider, workers);
   return workers;
+}
+
+function buildOllamaWorkers(config) {
+  const specs = config.workers.length ? config.workers : [{ id: "ollama-local", baseUrl: config.baseUrl }];
+  return specs.map(
+    (spec) =>
+      new OllamaChatWorker({
+        id: spec.id,
+        baseUrl: spec.baseUrl || config.baseUrl,
+        timeoutMs: config.timeoutMs,
+      }),
+  );
 }
 
 function addChatModel(models, id, workers, cliModel, fallback, capabilities, provider = null) {
