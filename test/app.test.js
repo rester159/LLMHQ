@@ -1331,6 +1331,53 @@ test("ollama worker calls the local Ollama chat API", async () => {
   assert.equal(result.providerMetadata.provider, "ollama");
 });
 
+test("ollama worker falls back to generate endpoint when chat endpoint rejects the model body", async () => {
+  const calls = [];
+  const worker = new OllamaChatWorker({
+    id: "ollama-test",
+    baseUrl: "http://ollama:11434",
+    timeoutMs: 1000,
+    fetchImpl: async (url, options = {}) => {
+      calls.push({
+        url,
+        body: JSON.parse(options.body),
+      });
+      if (String(url).endsWith("/api/chat")) {
+        return {
+          ok: false,
+          status: 400,
+          text: async () => JSON.stringify({ error: "model is required" }),
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            model: "llama3.2",
+            response: "generated fallback ok",
+            total_duration: 123,
+            eval_count: 4,
+          }),
+      };
+    },
+  });
+
+  const result = await worker.generateChat({
+    messages: [{ role: "user", content: "hello local model" }],
+    model: { id: "ollama-llama3.2", cliModel: "llama3.2" },
+    maxTokens: 20,
+  });
+
+  assert.equal(calls[0].url, "http://ollama:11434/api/chat");
+  assert.equal(calls[0].body.model, "llama3.2");
+  assert.equal(calls[1].url, "http://ollama:11434/api/generate");
+  assert.equal(calls[1].body.model, "llama3.2");
+  assert.match(calls[1].body.prompt, /user: hello local model/);
+  assert.equal(result.content, "generated fallback ok");
+  assert.equal(result.providerMetadata.endpoint, "generate");
+});
+
 test("runtime settings expose Ollama model aliases when Ollama is enabled", async () => {
   const assetDir = path.join(os.tmpdir(), `llmhq-test-${Date.now()}-ollama-settings`);
   const config = runtimeConfig(assetDir);

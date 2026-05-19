@@ -47,14 +47,31 @@ export class OllamaChatWorker {
       }
 
       const started = Date.now();
-      const response = await fetchWithTimeout(this.fetchImpl, `${this.baseUrl}/api/chat`, {
+      let response = await fetchWithTimeout(this.fetchImpl, `${this.baseUrl}/api/chat`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(payload),
         timeoutMs: this.timeoutMs,
       });
-      const raw = await response.text();
-      const parsed = parseJson(raw);
+      let raw = await response.text();
+      let parsed = parseJson(raw);
+      let sourceEndpoint = "chat";
+      if (!response.ok && ollamaModelRequired(parsed, raw)) {
+        response = await fetchWithTimeout(this.fetchImpl, `${this.baseUrl}/api/generate`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            model: model.cliModel,
+            prompt: messagesToPrompt(messages),
+            stream: false,
+            ...(Object.keys(options).length ? { options } : {}),
+          }),
+          timeoutMs: this.timeoutMs,
+        });
+        raw = await response.text();
+        parsed = parseJson(raw);
+        sourceEndpoint = "generate";
+      }
       if (!response.ok) {
         throw classifyOllamaFailure(response.status, parsed, raw, model.cliModel);
       }
@@ -76,6 +93,7 @@ export class OllamaChatWorker {
           provider: "ollama",
           baseUrl: this.baseUrl,
           nativeModel: model.cliModel,
+          endpoint: sourceEndpoint,
           totalDuration: parsed?.total_duration || null,
           loadDuration: parsed?.load_duration || null,
           promptEvalCount: parsed?.prompt_eval_count || null,
@@ -182,6 +200,38 @@ function parseJson(raw) {
   } catch {
     return null;
   }
+}
+
+function ollamaModelRequired(parsed, raw) {
+  const message = parsed?.error || raw || "";
+  return String(message).toLowerCase().includes("model is required");
+}
+
+function messagesToPrompt(messages) {
+  return messages
+    .map((message) => {
+      const role = ["system", "user", "assistant"].includes(message?.role) ? message.role : "user";
+      return `${role}: ${contentToText(message?.content)}`;
+    })
+    .join("\n");
+}
+
+function contentToText(content) {
+  if (!Array.isArray(content)) {
+    return content == null ? "" : String(content);
+  }
+  return content
+    .map((part) => {
+      if (part?.type === "text") {
+        return part.text || "";
+      }
+      if (part?.text) {
+        return part.text;
+      }
+      return "";
+    })
+    .filter(Boolean)
+    .join("\n");
 }
 
 function classifyOllamaFailure(status, parsed, raw, nativeModel) {
