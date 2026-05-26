@@ -9,7 +9,7 @@ on:
 
 concurrency:
   group: llmhq-unraid-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
   NODE_VERSION: "24"
@@ -61,7 +61,6 @@ jobs:
           source_next="${base}/source.next"
           data_dir="${base}/data"
           ollama_data_dir="${data_dir}/ollama"
-          embeddings_cache_dir="${data_dir}/embeddings"
 
           mkdir -p "${data_dir}"
           if [ -e "${ollama_data_dir}" ] && [ ! -d "${ollama_data_dir}" ]; then
@@ -70,14 +69,13 @@ jobs:
             echo "Moved non-directory Ollama data path to ${moved_ollama_path}"
           fi
           mkdir -p "${ollama_data_dir}"
-          mkdir -p "${embeddings_cache_dir}"
           rm -rf "${source_next}"
           mkdir -p "${source_next}"
           tar -xzf "/tmp/llmhq-${GITHUB_SHA}.tgz" -C "${source_next}"
-          docker rm -f llmhq-network-sync llmhq-webui llmhq llmhq-embeddings llmhq-ollama >/dev/null 2>&1 || true
+          docker rm -f llmhq-network-sync llmhq-webui llmhq-ollama >/dev/null 2>&1 || true
           if [ -f "${base}/source/compose.yaml" ]; then
-            LLMHQ_DATA_DIR="${data_dir}" LLMHQ_OLLAMA_DATA_DIR="${ollama_data_dir}" LLMHQ_EMBEDDINGS_CACHE_DIR="${embeddings_cache_dir}" docker compose -p llmhq -f "${base}/source/compose.yaml" stop network-sync >/dev/null 2>&1 || true
-            LLMHQ_DATA_DIR="${data_dir}" LLMHQ_OLLAMA_DATA_DIR="${ollama_data_dir}" LLMHQ_EMBEDDINGS_CACHE_DIR="${embeddings_cache_dir}" docker compose -p llmhq -f "${base}/source/compose.yaml" rm -f network-sync >/dev/null 2>&1 || true
+            LLMHQ_DATA_DIR="${data_dir}" LLMHQ_OLLAMA_DATA_DIR="${ollama_data_dir}" docker compose -p llmhq -f "${base}/source/compose.yaml" stop network-sync >/dev/null 2>&1 || true
+            LLMHQ_DATA_DIR="${data_dir}" LLMHQ_OLLAMA_DATA_DIR="${ollama_data_dir}" docker compose -p llmhq -f "${base}/source/compose.yaml" rm -f network-sync >/dev/null 2>&1 || true
           fi
           rm -rf "${base}/source"
           mv "${source_next}" "${base}/source"
@@ -87,21 +85,21 @@ jobs:
           if [ -f "${base}/.env" ]; then
             compose_env_args=(--env-file "${base}/.env")
           fi
-          LLMHQ_DATA_DIR="${data_dir}" LLMHQ_OLLAMA_DATA_DIR="${ollama_data_dir}" LLMHQ_EMBEDDINGS_CACHE_DIR="${embeddings_cache_dir}" docker compose "${compose_env_args[@]}" -p llmhq -f "${base}/source/compose.yaml" up -d --build ollama embeddings llmhq webui network-sync
+          LLMHQ_DATA_DIR="${data_dir}" LLMHQ_OLLAMA_DATA_DIR="${ollama_data_dir}" docker compose "${compose_env_args[@]}" -p llmhq -f "${base}/source/compose.yaml" up -d --build ollama llmhq webui network-sync
           if ! docker exec llmhq sh -lc 'npm run ollama:pull -- "${LLMHQ_OLLAMA_DEFAULT_MODEL:-llama3.2}"'; then
             echo "Ollama pull failed; continuing to readiness probe in case the model is already installed."
           fi
+          if ! docker exec llmhq sh -lc 'npm run ollama:pull -- "${LLMHQ_EMBEDDINGS_NATIVE_MODEL:-nomic-embed-text}"'; then
+            echo "Ollama embedding model pull failed; continuing to readiness probe in case the model is already installed."
+          fi
           host_port="${LLMHQ_HOST_PORT:-18088}"
           webui_port="${LLMHQ_WEBUI_PORT:-18089}"
-          embeddings_port="${LLMHQ_EMBEDDINGS_HOST_PORT:-18090}"
           host_probe_image="$(docker inspect -f '{{.Config.Image}}' llmhq)"
           for attempt in $(seq 1 30); do
             if docker exec llmhq node -e "fetch('http://127.0.0.1:8080/v1/models').then((r) => { if (!r.ok) process.exit(1); return r.text(); }).then((body) => console.log(body.slice(0, 500))).catch(() => process.exit(1))" \
               && docker exec llmhq node -e "fetch('http://127.0.0.1:8080/v1/chat/completions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model: 'ollama-llama3.2', fallback: 'none', max_tokens: 2, messages: [{ role: 'user', content: 'Reply ok.' }] }) }).then(async (r) => { const body = await r.text(); console.log(body.slice(0, 500)); if (!r.ok) process.exit(1); }).catch(() => process.exit(1))" \
-              && docker exec llmhq node -e "fetch('http://embeddings:8080/health').then(async (r) => { const body = await r.text(); console.log(body.slice(0, 500)); if (!r.ok) process.exit(1); }).catch(() => process.exit(1))" \
               && docker exec llmhq node -e "fetch('http://127.0.0.1:8080/v1/embeddings', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model: process.env.LLMHQ_EMBEDDINGS_MODEL || 'text-embedding-3-small', input: ['embedding readiness probe'] }) }).then(async (r) => { const body = await r.text(); console.log(body.slice(0, 500)); if (!r.ok) process.exit(1); const parsed = JSON.parse(body); if (!Array.isArray(parsed.data) || !Array.isArray(parsed.data[0]?.embedding)) process.exit(1); }).catch(() => process.exit(1))" \
               && docker run --rm --network host --entrypoint node "${host_probe_image}" -e "fetch('http://127.0.0.1:${host_port}/v1/models').then((r) => { if (!r.ok) process.exit(1); return r.text(); }).then((body) => console.log(body.slice(0, 500))).catch(() => process.exit(1))" \
-              && docker run --rm --network host --entrypoint node "${host_probe_image}" -e "fetch('http://127.0.0.1:${embeddings_port}/health').then((r) => { if (!r.ok) process.exit(1); return r.text(); }).then((body) => console.log(body.slice(0, 500))).catch(() => process.exit(1))" \
               && docker run --rm --network host --entrypoint node "${host_probe_image}" -e "fetch('http://127.0.0.1:${webui_port}/admin').then((r) => { if (!r.ok) process.exit(1); return r.text(); }).then((body) => { if (!body.includes('LLMHQ Admin')) process.exit(1); console.log(body.slice(0, 120)); }).catch(() => process.exit(1))" \
               && docker run --rm --network host --entrypoint node "${host_probe_image}" -e "fetch('http://127.0.0.1:${webui_port}/v1/models').then((r) => { if (!r.ok) process.exit(1); return r.text(); }).then((body) => console.log(body.slice(0, 500))).catch(() => process.exit(1))" \
               && docker inspect -f '{{.State.Running}}' llmhq-network-sync | grep -q true; then
@@ -111,5 +109,4 @@ jobs:
             sleep 2
           done
           docker logs --tail=120 llmhq || true
-          docker logs --tail=120 llmhq-embeddings || true
           exit 1

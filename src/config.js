@@ -83,7 +83,7 @@ export function loadConfig(env = process.env) {
         mergedEnv.LLMHQ_OLLAMA_BASE_URL ||
         "http://127.0.0.1:11434",
       modelAlias: mergedEnv.LLMHQ_EMBEDDINGS_MODEL || "text-embedding-3-small",
-      nativeModel: mergedEnv.LLMHQ_EMBEDDINGS_NATIVE_MODEL || "BAAI/bge-small-en-v1.5",
+      nativeModel: mergedEnv.LLMHQ_EMBEDDINGS_NATIVE_MODEL || "nomic-embed-text",
       timeoutMs: intFromEnv(
         mergedEnv.LLMHQ_EMBEDDINGS_TIMEOUT_MS,
         intFromEnv(mergedEnv.LLMHQ_OLLAMA_TIMEOUT_MS, 180000),
