@@ -32,7 +32,6 @@ export async function buildApp({
   conversationStore = null,
   workspaceStore = null,
   settingsStore = null,
-  fetchImpl = fetch,
 } = {}) {
   const app = fastify || (await import("fastify")).default({ logger: true });
   const store = assetStore || new AssetStore(config.assetDir);
@@ -66,7 +65,7 @@ export async function buildApp({
   app.get("/v1/models", async () => {
     return {
       object: "list",
-      data: serializeModels(runtime.registry, config),
+      data: serializeModels(runtime.registry),
     };
   });
 
@@ -262,19 +261,6 @@ export async function buildApp({
         body,
         messages: body.messages,
         defaultChatModel: getDefaultChatModel(runtime, config),
-      });
-      return reply.send(response);
-    } catch (error) {
-      return sendProviderError(reply, error);
-    }
-  });
-
-  app.post("/v1/embeddings", async (request, reply) => {
-    try {
-      const response = await runEmbeddingRequest({
-        config,
-        fetchImpl,
-        body: request.body || {},
       });
       return reply.send(response);
     } catch (error) {
@@ -500,8 +486,8 @@ function createRuntimeRegistry(config, settings) {
   });
 }
 
-function serializeModels(registry, config = null) {
-  const models = [...registry.models.values()].map((model) => ({
+function serializeModels(registry) {
+  return [...registry.models.values()].map((model) => ({
     id: model.id,
     object: "model",
     kind: model.kind,
@@ -511,19 +497,6 @@ function serializeModels(registry, config = null) {
     provider: model.provider || null,
     cli_model: model.cliModel || null,
   }));
-  if (config?.embeddings?.enabled) {
-    models.push({
-      id: config.embeddings.modelAlias,
-      object: "model",
-      kind: "embedding",
-      capabilities: ["embed"],
-      output: ["embedding"],
-      fallback: [],
-      provider: "ollama",
-      cli_model: config.embeddings.nativeModel,
-    });
-  }
-  return models;
 }
 
 function getDefaultChatModel(runtime, config) {
@@ -751,148 +724,6 @@ async function runChatCompletion({
     attempts,
     statusEvents,
   });
-}
-
-async function runEmbeddingRequest({ config, fetchImpl, body }) {
-  if (!config.embeddings?.enabled) {
-    throw new ProviderError("no_model_configured", "Embeddings are not enabled.");
-  }
-  const requestedModel = String(body.model || config.embeddings.modelAlias || "").trim();
-  if (!requestedModel) {
-    throw new ProviderError("invalid_request", "model is required.");
-  }
-  const input = normalizeEmbeddingInput(body.input);
-  const nativeModel = resolveEmbeddingNativeModel(config.embeddings, requestedModel);
-  const embeddings = await fetchOllamaEmbeddings({
-    fetchImpl,
-    baseUrl: config.embeddings.baseUrl,
-    timeoutMs: config.embeddings.timeoutMs,
-    model: nativeModel,
-    input,
-  });
-  return createEmbeddingResponse({
-    requestedModel,
-    nativeModel,
-    embeddings,
-  });
-}
-
-function normalizeEmbeddingInput(input) {
-  if (typeof input === "string") {
-    if (!input.trim()) {
-      throw new ProviderError("invalid_request", "input must not be empty.");
-    }
-    return [input];
-  }
-  if (Array.isArray(input) && input.length && input.every((item) => typeof item === "string" && item.trim())) {
-    return input;
-  }
-  throw new ProviderError("invalid_request", "input must be a non-empty string or string array.");
-}
-
-function resolveEmbeddingNativeModel(embeddingConfig, requestedModel) {
-  if (requestedModel === embeddingConfig.modelAlias || requestedModel.startsWith("text-embedding-")) {
-    return embeddingConfig.nativeModel;
-  }
-  return requestedModel;
-}
-
-async function fetchOllamaEmbeddings({ fetchImpl, baseUrl, timeoutMs, model, input }) {
-  const normalizedBaseUrl = String(baseUrl || "").replace(/\/+$/, "");
-  if (!normalizedBaseUrl) {
-    throw new ProviderError("no_model_configured", "Embeddings base URL is not configured.");
-  }
-
-  const embedResponse = await fetchJsonWithTimeout(fetchImpl, `${normalizedBaseUrl}/api/embed`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ model, input }),
-    timeoutMs,
-  });
-  if (embedResponse.ok) {
-    const vectors = embedResponse.parsed?.embeddings;
-    if (Array.isArray(vectors) && vectors.length === input.length) {
-      return vectors.map(validateEmbeddingVector);
-    }
-    throw new ProviderError("provider_error", "Ollama /api/embed returned an invalid embeddings payload.", {
-      output: embedResponse.raw,
-    });
-  }
-  if (embedResponse.status !== 404) {
-    throw classifyEmbeddingFailure(embedResponse.status, embedResponse.parsed, embedResponse.raw, model);
-  }
-
-  const vectors = [];
-  for (const text of input) {
-    const legacyResponse = await fetchJsonWithTimeout(fetchImpl, `${normalizedBaseUrl}/api/embeddings`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ model, prompt: text }),
-      timeoutMs,
-    });
-    if (!legacyResponse.ok) {
-      throw classifyEmbeddingFailure(legacyResponse.status, legacyResponse.parsed, legacyResponse.raw, model);
-    }
-    vectors.push(validateEmbeddingVector(legacyResponse.parsed?.embedding));
-  }
-  return vectors;
-}
-
-function validateEmbeddingVector(value) {
-  if (!Array.isArray(value) || !value.length || !value.every((item) => typeof item === "number" && Number.isFinite(item))) {
-    throw new ProviderError("provider_error", "Embedding provider returned an invalid vector.");
-  }
-  return value;
-}
-
-async function fetchJsonWithTimeout(fetchImpl, url, { timeoutMs, ...options }) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs || 180000);
-  try {
-    const response = await fetchImpl(url, { ...options, signal: controller.signal });
-    const raw = await response.text();
-    let parsed = null;
-    try {
-      parsed = raw ? JSON.parse(raw) : null;
-    } catch {
-      parsed = null;
-    }
-    return { ok: response.ok, status: response.status, parsed, raw };
-  } catch (error) {
-    if (error.name === "AbortError") {
-      throw new ProviderError("worker_timeout", `Embedding provider timed out after ${timeoutMs}ms.`);
-    }
-    throw new ProviderError("provider_error", `Embedding provider request failed: ${error.message}`);
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-function classifyEmbeddingFailure(status, parsed, raw, nativeModel) {
-  const message = parsed?.error || raw || `Embedding provider returned HTTP ${status}.`;
-  if (status === 404 && /model|not found|pull/i.test(message)) {
-    return new ProviderError(
-      "model_not_installed",
-      `Embedding model ${nativeModel} is not installed. Pull it in the Ollama container, then retry.`,
-      { output: message },
-    );
-  }
-  return new ProviderError("provider_error", `Embedding provider failed: ${message}`, { output: message });
-}
-
-function createEmbeddingResponse({ requestedModel, nativeModel, embeddings }) {
-  return {
-    object: "list",
-    model: requestedModel,
-    used_model: nativeModel,
-    llmhq: llmhqInstance(),
-    data: embeddings.map((embedding, index) => ({
-      object: "embedding",
-      index,
-      embedding,
-    })),
-    usage: null,
-  };
 }
 
 async function tryModelWithFallbacks(

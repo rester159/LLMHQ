@@ -73,22 +73,6 @@ export function loadConfig(env = process.env) {
       defaultModel: mergedEnv.LLMHQ_OLLAMA_DEFAULT_MODEL || "llama3.2",
       coderModel: mergedEnv.LLMHQ_OLLAMA_CODER_MODEL || "qwen2.5-coder:7b",
     },
-    embeddings: {
-      enabled: boolFromEnv(
-        mergedEnv.LLMHQ_EMBEDDINGS_ENABLED,
-        boolFromEnv(mergedEnv.LLMHQ_OLLAMA_ENABLED, false),
-      ),
-      baseUrl:
-        mergedEnv.LLMHQ_EMBEDDINGS_BASE_URL ||
-        mergedEnv.LLMHQ_OLLAMA_BASE_URL ||
-        "http://127.0.0.1:11434",
-      modelAlias: mergedEnv.LLMHQ_EMBEDDINGS_MODEL || "text-embedding-3-small",
-      nativeModel: mergedEnv.LLMHQ_EMBEDDINGS_NATIVE_MODEL || "nomic-embed-text",
-      timeoutMs: intFromEnv(
-        mergedEnv.LLMHQ_EMBEDDINGS_TIMEOUT_MS,
-        intFromEnv(mergedEnv.LLMHQ_OLLAMA_TIMEOUT_MS, 180000),
-      ),
-    },
     chatgpt: {
       enabled: boolFromEnv(mergedEnv.LLMHQ_EXPERIMENTAL_CHATGPT_BROWSER, false),
       profileDir: path.resolve(
