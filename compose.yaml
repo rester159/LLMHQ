@@ -12,12 +12,30 @@ services:
         aliases:
           - ollama
 
+  embeddings:
+    build: ./embeddings
+    container_name: llmhq-embeddings
+    restart: unless-stopped
+    ports:
+      - "${LLMHQ_EMBEDDINGS_HOST_BIND:-0.0.0.0}:${LLMHQ_EMBEDDINGS_HOST_PORT:-18090}:8080"
+    environment:
+      EMBEDDING_MODEL_ALIAS: "${LLMHQ_EMBEDDINGS_MODEL:-text-embedding-3-small}"
+      EMBEDDING_MODEL: "${LLMHQ_EMBEDDINGS_NATIVE_MODEL:-BAAI/bge-small-en-v1.5}"
+      EMBEDDING_CACHE_DIR: "/cache"
+    volumes:
+      - ${LLMHQ_EMBEDDINGS_CACHE_DIR:-./data/embeddings}:/cache
+    networks:
+      llmhq_private:
+        aliases:
+          - embeddings
+
   llmhq:
     build: .
     container_name: llmhq
     restart: unless-stopped
     depends_on:
       - ollama
+      - embeddings
     ports:
       - "${LLMHQ_HOST_BIND:-127.0.0.1}:${LLMHQ_HOST_PORT:-18088}:8080"
     labels:
@@ -51,9 +69,9 @@ services:
       LLMHQ_OLLAMA_CODER_MODEL: "${LLMHQ_OLLAMA_CODER_MODEL:-qwen2.5-coder:7b}"
       LLMHQ_OLLAMA_TIMEOUT_MS: "${LLMHQ_OLLAMA_TIMEOUT_MS:-180000}"
       LLMHQ_EMBEDDINGS_ENABLED: "${LLMHQ_EMBEDDINGS_ENABLED:-1}"
-      LLMHQ_EMBEDDINGS_BASE_URL: "${LLMHQ_EMBEDDINGS_BASE_URL:-http://ollama:11434}"
+      LLMHQ_EMBEDDINGS_BASE_URL: "${LLMHQ_EMBEDDINGS_BASE_URL:-http://embeddings:8080}"
       LLMHQ_EMBEDDINGS_MODEL: "${LLMHQ_EMBEDDINGS_MODEL:-text-embedding-3-small}"
-      LLMHQ_EMBEDDINGS_NATIVE_MODEL: "${LLMHQ_EMBEDDINGS_NATIVE_MODEL:-nomic-embed-text}"
+      LLMHQ_EMBEDDINGS_NATIVE_MODEL: "${LLMHQ_EMBEDDINGS_NATIVE_MODEL:-BAAI/bge-small-en-v1.5}"
       LLMHQ_EMBEDDINGS_TIMEOUT_MS: "${LLMHQ_EMBEDDINGS_TIMEOUT_MS:-180000}"
       LLMHQ_EXPERIMENTAL_CHATGPT_BROWSER: "1"
       LLMHQ_CHATGPT_PROFILE_DIR: "/app/data/browser-profiles/chatgpt-main"

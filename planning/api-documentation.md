@@ -43,7 +43,7 @@ Apps call model aliases. They do not call provider-native model names directly.
 | `codex-gpt-5.5-vision` | `/v1/chat/completions` | Codex CLI | `gpt-5.5` | text | Image-input alias. |
 | `ollama-llama3.2` | `/v1/chat/completions` | Ollama HTTP | `llama3.2` | text | Local/private model alias. |
 | `ollama-qwen2.5-coder` | `/v1/chat/completions` | Ollama HTTP | `qwen2.5-coder:7b` | text | Disabled by default until pulled/enabled. |
-| `text-embedding-3-small` | `/v1/embeddings` | Ollama HTTP | `nomic-embed-text` | embedding | OpenAI-compatible embedding alias. |
+| `text-embedding-3-small` | `/v1/embeddings` | FastEmbed HTTP | `BAAI/bge-small-en-v1.5` | embedding | Embedding alias. |
 | `chatgpt-image-browser` | `/v1/images/generations` | ChatGPT browser | web session | image | Experimental image route. |
 
 Fetch live aliases:
@@ -73,7 +73,6 @@ Pull the default native model:
 ```powershell
 docker compose up -d ollama
 docker compose exec llmhq npm run ollama:pull -- llama3.2
-docker compose exec llmhq npm run ollama:pull -- nomic-embed-text
 ```
 
 Then call:
@@ -90,7 +89,7 @@ Then call:
 
 If the native model has not been pulled, LLMHQ returns `model_not_installed` and, when fallback is enabled, attempts the configured fallback chain.
 
-The `/v1/embeddings` route uses the same Ollama service and defaults to the native `nomic-embed-text` model. It returns `model_not_installed` until that embedding model has been pulled.
+The `/v1/embeddings` route uses the bundled FastEmbed service by default and stores model files under `${LLMHQ_EMBEDDINGS_CACHE_DIR:-./data/embeddings}`.
 
 ## Fallback
 
@@ -176,7 +175,7 @@ Invoke-RestMethod `
 
 ### `POST /v1/embeddings`
 
-Use for OpenAI-compatible embedding requests.
+Use for standard `/v1/embeddings` requests.
 
 Request fields:
 
@@ -200,7 +199,7 @@ Example response:
 {
   "object": "list",
   "model": "text-embedding-3-small",
-  "used_model": "nomic-embed-text",
+  "used_model": "BAAI/bge-small-en-v1.5",
   "data": [
     { "object": "embedding", "index": 0, "embedding": [0.0123, -0.0456] }
   ],
@@ -383,9 +382,9 @@ Common codes:
 | `LLMHQ_OLLAMA_CODER_MODEL` | Native model backing optional `ollama-qwen2.5-coder`. |
 | `LLMHQ_OLLAMA_TIMEOUT_MS` | Ollama worker timeout. |
 | `LLMHQ_EMBEDDINGS_ENABLED` | Enables `/v1/embeddings`. |
-| `LLMHQ_EMBEDDINGS_BASE_URL` | Ollama base URL for embeddings. |
-| `LLMHQ_EMBEDDINGS_MODEL` | OpenAI-compatible embedding alias. |
-| `LLMHQ_EMBEDDINGS_NATIVE_MODEL` | Native Ollama embedding model. |
+| `LLMHQ_EMBEDDINGS_BASE_URL` | Embedding service base URL. Compose sets `http://embeddings:8080`. |
+| `LLMHQ_EMBEDDINGS_MODEL` | Embedding alias. |
+| `LLMHQ_EMBEDDINGS_NATIVE_MODEL` | Native FastEmbed model. |
 | `LLMHQ_EMBEDDINGS_TIMEOUT_MS` | Embedding request timeout. |
 | `LLMHQ_EXPERIMENTAL_CHATGPT_BROWSER` | Enables browser-backed image generation. |
 
@@ -394,7 +393,6 @@ Common codes:
 ```powershell
 docker compose up -d --build
 docker compose exec llmhq npm run ollama:pull -- llama3.2
-docker compose exec llmhq npm run ollama:pull -- nomic-embed-text
 docker compose exec llmhq npm run doctor
 Invoke-RestMethod http://127.0.0.1:18088/health | ConvertTo-Json -Depth 8
 Invoke-RestMethod http://127.0.0.1:18088/v1/models | ConvertTo-Json -Depth 8

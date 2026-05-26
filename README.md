@@ -9,7 +9,7 @@ It also includes an Ollama sidecar so local models can be called through the sam
 
 - `POST /v1/images/generations` accepts a prompt and returns a stored local image asset.
 - `POST /v1/chat/completions` accepts OpenAI-style chat requests for regular LLM/coding activity.
-- `POST /v1/embeddings` accepts OpenAI-style embedding requests and returns vectors from the local Ollama embedding model.
+- `POST /v1/embeddings` accepts standard embedding requests and returns vectors from a lightweight local FastEmbed service.
 - `POST /v1/conversations/messages` lets LLMHQ own chat history by project/workflow key.
 - `POST /v1/conversations` creates or resolves a named project conversation.
 - `GET /v1/models` lists configured models and fallback chains.
@@ -77,7 +77,6 @@ For Unraid/container setup, the practical flow is:
 ```powershell
 docker compose up -d --build
 docker compose exec llmhq npm run ollama:pull -- llama3.2
-docker compose exec llmhq npm run ollama:pull -- nomic-embed-text
 docker compose exec llmhq npm run login:claude -- claude-1
 docker compose exec llmhq npm run login:codex -- codex-1
 docker compose exec llmhq npm run login:chatgpt:vnc
@@ -151,7 +150,7 @@ Fallback is explicit. If `claude-opus` fails and `claude-sonnet` succeeds, the r
 
 Use `codex-gpt-5.5` for Codex text/code turns. Use `codex-gpt-5.5-vision` for Codex image-input turns that include `image_url` message parts pointing at local image paths. Use `ollama-llama3.2` for local/private Ollama text turns after pulling the native `llama3.2` model. Use `chatgpt-image-browser` through `/v1/images/generations` for image output.
 
-Use `text-embedding-3-small` through `/v1/embeddings` for OpenAI-compatible embedding requests. In the default Compose setup this alias is backed by Ollama `nomic-embed-text`; pull it with `docker compose exec llmhq npm run ollama:pull -- nomic-embed-text`.
+Use `text-embedding-3-small` through `/v1/embeddings` for embedding requests. In the default Compose setup this alias is backed by the bundled FastEmbed service using `BAAI/bge-small-en-v1.5` on CPU.
 
 Example local Ollama call:
 
@@ -300,7 +299,6 @@ Invoke-RestMethod `
 docker compose build
 docker compose up -d
 docker compose exec llmhq npm run ollama:pull -- llama3.2
-docker compose exec llmhq npm run ollama:pull -- nomic-embed-text
 docker compose logs -f llmhq
 ```
 

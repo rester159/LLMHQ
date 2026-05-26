@@ -9,7 +9,7 @@ Current provider workers:
 - Claude CLI worker for `claude-haiku`, `claude-sonnet`, and `claude-opus`.
 - Codex CLI worker for `codex-gpt-5.5`.
 - Ollama HTTP worker for local models such as `ollama-llama3.2`.
-- Ollama HTTP embeddings for OpenAI-compatible `/v1/embeddings` requests.
+- Lightweight FastEmbed service for standard `/v1/embeddings` requests.
 - Experimental ChatGPT browser worker for `chatgpt-image-browser` image generation.
 
 Current server defaults:
@@ -96,10 +96,10 @@ Apps should use LLMHQ model aliases, not provider-native model names.
 | `codex-gpt-5.5-vision` | Chat | chat, vision, image input | Codex CLI |
 | `ollama-llama3.2` | Chat | chat, local, private | Ollama HTTP |
 | `ollama-qwen2.5-coder` | Chat | chat, code, local, private | Ollama HTTP, disabled by default until pulled/enabled |
-| `text-embedding-3-small` | Embedding | embed | Ollama HTTP, maps to `nomic-embed-text` by default |
+| `text-embedding-3-small` | Embedding | embed | FastEmbed HTTP, maps to `BAAI/bge-small-en-v1.5` by default |
 | `chatgpt-image-browser` | Image | image generation, experimental image edit | ChatGPT browser |
 
-`codex-gpt-5.5` and `codex-gpt-5.5-vision` route to the same Codex CLI provider model by default, but they are separate LLMHQ aliases so applications can request text/code turns and image-input vision turns explicitly. `ollama-llama3.2` routes to the local Ollama container and requires the native `llama3.2` model to be pulled. `text-embedding-3-small` is an embedding alias and requires the native `nomic-embed-text` model by default. `chatgpt-image-browser` is an image-output model and is called through `/v1/images/generations`, not `/v1/chat/completions`.
+`codex-gpt-5.5` and `codex-gpt-5.5-vision` route to the same Codex CLI provider model by default, but they are separate LLMHQ aliases so applications can request text/code turns and image-input vision turns explicitly. `ollama-llama3.2` routes to the local Ollama container and requires the native `llama3.2` model to be pulled. `text-embedding-3-small` is an embedding alias backed by the bundled FastEmbed service by default. `chatgpt-image-browser` is an image-output model and is called through `/v1/images/generations`, not `/v1/chat/completions`.
 
 Fetch the live list from:
 
@@ -631,7 +631,7 @@ Status events are generic and provider-neutral. Apps can show `message` as the c
 
 ### `POST /v1/embeddings`
 
-Runs an OpenAI-compatible embedding request. The default alias is `text-embedding-3-small`; LLMHQ maps that alias to the configured native Ollama embedding model, `nomic-embed-text` by default.
+Runs a standard embedding request. The default alias is `text-embedding-3-small`; LLMHQ maps that alias to the configured embedding service, `BAAI/bge-small-en-v1.5` through FastEmbed by default.
 
 Request body:
 
@@ -661,7 +661,7 @@ Example response:
 {
   "object": "list",
   "model": "text-embedding-3-small",
-  "used_model": "nomic-embed-text",
+  "used_model": "BAAI/bge-small-en-v1.5",
   "data": [
     {
       "object": "embedding",
@@ -1149,11 +1149,10 @@ http://127.0.0.1:7900/vnc.html?autoconnect=1&resize=scale
 
 Log in interactively with Google in the remote browser, then press Enter in the login command terminal when the ChatGPT prompt box is usable.
 
-Ollama does not require provider login. It does require local model files. The default Compose setup starts `llmhq-ollama` and stores models under `${LLMHQ_OLLAMA_DATA_DIR:-./data/ollama}`. Pull the default native chat and embedding models with:
+Ollama does not require provider login. It does require local model files. The default Compose setup starts `llmhq-ollama` and stores models under `${LLMHQ_OLLAMA_DATA_DIR:-./data/ollama}`. Pull the default native chat model with:
 
 ```powershell
 docker compose exec llmhq npm run ollama:pull -- llama3.2
-docker compose exec llmhq npm run ollama:pull -- nomic-embed-text
 ```
 
 After the pull, apps can call LLMHQ with:
@@ -1199,9 +1198,9 @@ After the pull, apps can call LLMHQ with:
 | `LLMHQ_OLLAMA_CODER_MODEL` | `qwen2.5-coder:7b` | Native Ollama model backing the disabled-by-default coder alias. |
 | `LLMHQ_OLLAMA_TIMEOUT_MS` | `180000` | Ollama worker timeout. |
 | `LLMHQ_EMBEDDINGS_ENABLED` | same as `LLMHQ_OLLAMA_ENABLED` | Enables `/v1/embeddings`. |
-| `LLMHQ_EMBEDDINGS_BASE_URL` | `LLMHQ_OLLAMA_BASE_URL` | Ollama base URL used for embeddings. |
-| `LLMHQ_EMBEDDINGS_MODEL` | `text-embedding-3-small` | OpenAI-compatible embedding alias served by LLMHQ. |
-| `LLMHQ_EMBEDDINGS_NATIVE_MODEL` | `nomic-embed-text` | Native Ollama embedding model. |
+| `LLMHQ_EMBEDDINGS_BASE_URL` | `LLMHQ_OLLAMA_BASE_URL` | Embedding service base URL. Compose sets this to `http://embeddings:8080`. |
+| `LLMHQ_EMBEDDINGS_MODEL` | `text-embedding-3-small` | Embedding alias served by LLMHQ. |
+| `LLMHQ_EMBEDDINGS_NATIVE_MODEL` | `BAAI/bge-small-en-v1.5` | Native FastEmbed model. |
 | `LLMHQ_EMBEDDINGS_TIMEOUT_MS` | `LLMHQ_OLLAMA_TIMEOUT_MS` | Embedding request timeout. |
 | `LLMHQ_EXPERIMENTAL_CHATGPT_BROWSER` | `false` | Enables browser-backed ChatGPT image worker. |
 | `LLMHQ_CHATGPT_PROFILE_DIR` | `./data/browser-profiles/chatgpt-main` | Persistent browser profile. |

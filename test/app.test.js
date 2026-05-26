@@ -197,7 +197,7 @@ test("chat completions return OpenAI-compatible content", async () => {
   ]);
 });
 
-test("embeddings route returns OpenAI-compatible vectors from Ollama", async () => {
+test("embeddings route proxies standard embedding service", async () => {
   const assetDir = path.join(os.tmpdir(), `llmhq-test-${Date.now()}-embeddings`);
   const app = await buildApp({
     fastify: Fastify(),
@@ -205,25 +205,28 @@ test("embeddings route returns OpenAI-compatible vectors from Ollama", async () 
       ...testConfig(assetDir),
       embeddings: {
         enabled: true,
-        baseUrl: "http://ollama-test:11434",
+        baseUrl: "http://embeddings-test:8080",
         modelAlias: "text-embedding-3-small",
-        nativeModel: "nomic-embed-text",
+        nativeModel: "BAAI/bge-small-en-v1.5",
         timeoutMs: 1000,
       },
     },
     registry: createModelRegistry({ fakeWorker: new FakeImageWorker(), enableFake: true }),
     assetStore: new AssetStore(assetDir),
     fetchImpl: async (url, options) => {
-      assert.equal(String(url), "http://ollama-test:11434/api/embed");
+      assert.equal(String(url), "http://embeddings-test:8080/v1/embeddings");
       assert.deepEqual(JSON.parse(options.body), {
-        model: "nomic-embed-text",
+        model: "text-embedding-3-small",
         input: ["one", "two"],
       });
       return new Response(
         JSON.stringify({
-          embeddings: [
-            [0.1, 0.2, 0.3],
-            [0.4, 0.5, 0.6],
+          object: "list",
+          model: "text-embedding-3-small",
+          used_model: "BAAI/bge-small-en-v1.5",
+          data: [
+            { object: "embedding", index: 0, embedding: [0.1, 0.2, 0.3] },
+            { object: "embedding", index: 1, embedding: [0.4, 0.5, 0.6] },
           ],
         }),
         { status: 200 },
@@ -242,11 +245,56 @@ test("embeddings route returns OpenAI-compatible vectors from Ollama", async () 
   const body = response.json();
   assert.equal(body.object, "list");
   assert.equal(body.model, "text-embedding-3-small");
-  assert.equal(body.used_model, "nomic-embed-text");
+  assert.equal(body.used_model, "BAAI/bge-small-en-v1.5");
   assert.deepEqual(body.data.map((item) => item.embedding), [
     [0.1, 0.2, 0.3],
     [0.4, 0.5, 0.6],
   ]);
+});
+
+test("embeddings route can fall back to Ollama native embedding API", async () => {
+  const assetDir = path.join(os.tmpdir(), `llmhq-test-${Date.now()}-embeddings-ollama`);
+  const calls = [];
+  const app = await buildApp({
+    fastify: Fastify(),
+    config: {
+      ...testConfig(assetDir),
+      embeddings: {
+        enabled: true,
+        baseUrl: "http://ollama-test:11434",
+        modelAlias: "text-embedding-3-small",
+        nativeModel: "nomic-embed-text",
+        timeoutMs: 1000,
+      },
+    },
+    registry: createModelRegistry({ fakeWorker: new FakeImageWorker(), enableFake: true }),
+    assetStore: new AssetStore(assetDir),
+    fetchImpl: async (url, options) => {
+      calls.push(String(url));
+      if (String(url).endsWith("/v1/embeddings")) {
+        return new Response(JSON.stringify({ error: "not found" }), { status: 404 });
+      }
+      assert.equal(String(url), "http://ollama-test:11434/api/embed");
+      assert.deepEqual(JSON.parse(options.body), {
+        model: "nomic-embed-text",
+        input: ["one"],
+      });
+      return new Response(JSON.stringify({ embeddings: [[0.1, 0.2, 0.3]] }), { status: 200 });
+    },
+  });
+
+  const response = await app.inject({
+    method: "POST",
+    url: "/v1/embeddings",
+    headers: { authorization: "Bearer test-key" },
+    payload: { model: "text-embedding-3-small", input: "one" },
+  });
+
+  assert.equal(response.statusCode, 200);
+  const body = response.json();
+  assert.equal(body.used_model, "nomic-embed-text");
+  assert.deepEqual(body.data[0].embedding, [0.1, 0.2, 0.3]);
+  assert.deepEqual(calls, ["http://ollama-test:11434/v1/embeddings", "http://ollama-test:11434/api/embed"]);
 });
 
 test("models endpoint lists configured chat aliases", async () => {

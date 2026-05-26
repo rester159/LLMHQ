@@ -519,7 +519,7 @@ function serializeModels(registry, config = null) {
       capabilities: ["embed"],
       output: ["embedding"],
       fallback: [],
-      provider: "ollama",
+      provider: "embedding-http",
       cli_model: config.embeddings.nativeModel,
     });
   }
@@ -763,17 +763,18 @@ async function runEmbeddingRequest({ config, fetchImpl, body }) {
   }
   const input = normalizeEmbeddingInput(body.input);
   const nativeModel = resolveEmbeddingNativeModel(config.embeddings, requestedModel);
-  const embeddings = await fetchOllamaEmbeddings({
+  const result = await fetchEmbeddingVectors({
     fetchImpl,
     baseUrl: config.embeddings.baseUrl,
     timeoutMs: config.embeddings.timeoutMs,
-    model: nativeModel,
+    requestedModel,
+    nativeModel,
     input,
   });
   return createEmbeddingResponse({
     requestedModel,
-    nativeModel,
-    embeddings,
+    usedModel: result.usedModel,
+    embeddings: result.embeddings,
   });
 }
 
@@ -797,29 +798,54 @@ function resolveEmbeddingNativeModel(embeddingConfig, requestedModel) {
   return requestedModel;
 }
 
-async function fetchOllamaEmbeddings({ fetchImpl, baseUrl, timeoutMs, model, input }) {
+async function fetchEmbeddingVectors({ fetchImpl, baseUrl, timeoutMs, requestedModel, nativeModel, input }) {
   const normalizedBaseUrl = String(baseUrl || "").replace(/\/+$/, "");
   if (!normalizedBaseUrl) {
     throw new ProviderError("no_model_configured", "Embeddings base URL is not configured.");
   }
 
+  const openAiResponse = await fetchJsonWithTimeout(fetchImpl, `${normalizedBaseUrl}/v1/embeddings`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model: requestedModel, input }),
+    timeoutMs,
+  });
+  if (openAiResponse.ok) {
+    const data = openAiResponse.parsed?.data;
+    if (Array.isArray(data) && data.length === input.length) {
+      const vectors = [...data]
+        .sort((left, right) => Number(left?.index || 0) - Number(right?.index || 0))
+        .map((item) => validateEmbeddingVector(item?.embedding));
+      return {
+        embeddings: vectors,
+        usedModel: openAiResponse.parsed?.used_model || openAiResponse.parsed?.model || requestedModel,
+      };
+    }
+    throw new ProviderError("provider_error", "Embedding provider returned an invalid /v1/embeddings payload.", {
+      output: openAiResponse.raw,
+    });
+  }
+  if (openAiResponse.status !== 404) {
+    throw classifyEmbeddingFailure(openAiResponse.status, openAiResponse.parsed, openAiResponse.raw, requestedModel);
+  }
+
   const embedResponse = await fetchJsonWithTimeout(fetchImpl, `${normalizedBaseUrl}/api/embed`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ model, input }),
+    body: JSON.stringify({ model: nativeModel, input }),
     timeoutMs,
   });
   if (embedResponse.ok) {
     const vectors = embedResponse.parsed?.embeddings;
     if (Array.isArray(vectors) && vectors.length === input.length) {
-      return vectors.map(validateEmbeddingVector);
+      return { embeddings: vectors.map(validateEmbeddingVector), usedModel: nativeModel };
     }
     throw new ProviderError("provider_error", "Ollama /api/embed returned an invalid embeddings payload.", {
       output: embedResponse.raw,
     });
   }
   if (embedResponse.status !== 404) {
-    throw classifyEmbeddingFailure(embedResponse.status, embedResponse.parsed, embedResponse.raw, model);
+    throw classifyEmbeddingFailure(embedResponse.status, embedResponse.parsed, embedResponse.raw, nativeModel);
   }
 
   const vectors = [];
@@ -827,15 +853,15 @@ async function fetchOllamaEmbeddings({ fetchImpl, baseUrl, timeoutMs, model, inp
     const legacyResponse = await fetchJsonWithTimeout(fetchImpl, `${normalizedBaseUrl}/api/embeddings`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ model, prompt: text }),
+      body: JSON.stringify({ model: nativeModel, prompt: text }),
       timeoutMs,
     });
     if (!legacyResponse.ok) {
-      throw classifyEmbeddingFailure(legacyResponse.status, legacyResponse.parsed, legacyResponse.raw, model);
+      throw classifyEmbeddingFailure(legacyResponse.status, legacyResponse.parsed, legacyResponse.raw, nativeModel);
     }
     vectors.push(validateEmbeddingVector(legacyResponse.parsed?.embedding));
   }
-  return vectors;
+  return { embeddings: vectors, usedModel: nativeModel };
 }
 
 function validateEmbeddingVector(value) {
@@ -880,11 +906,11 @@ function classifyEmbeddingFailure(status, parsed, raw, nativeModel) {
   return new ProviderError("provider_error", `Embedding provider failed: ${message}`, { output: message });
 }
 
-function createEmbeddingResponse({ requestedModel, nativeModel, embeddings }) {
+function createEmbeddingResponse({ requestedModel, usedModel, embeddings }) {
   return {
     object: "list",
     model: requestedModel,
-    used_model: nativeModel,
+    used_model: usedModel,
     llmhq: llmhqInstance(),
     data: embeddings.map((embedding, index) => ({
       object: "embedding",
